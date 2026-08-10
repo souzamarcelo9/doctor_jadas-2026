@@ -1,0 +1,25 @@
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+
+body {
+  @apply font-body text-ink-900 bg-[#f4f8f8];
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #c8dedd; border-radius: 999px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+.card { @apply bg-white rounded-xl2 shadow-card border border-black/5; }
+
+.badge-leve { @apply bg-emerald-100 text-emerald-700 border border-emerald-200; }
+.badge-moderada { @apply bg-amber-100 text-amber-700 border border-amber-200; }
+.badge-severa { @apply bg-rose-100 text-rose-700 border border-rose-200; }
+
+.focus-ring:focus-visible { outline: 2px solid #178a8c; outline-offset: 2px; }

@@ -1,0 +1,153 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Helpers ----------
+
+    function autenticado() {
+      return request.auth != null;
+    }
+
+    function souMembro(clinicaId) {
+      return autenticado() &&
+        exists(/databases/$(database)/documents/clinicas/$(clinicaId)/membros/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/clinicas/$(clinicaId)/membros/$(request.auth.uid)).data.ativo == true;
+    }
+
+    function meuPapel(clinicaId) {
+      return get(/databases/$(database)/documents/clinicas/$(clinicaId)/membros/$(request.auth.uid)).data.papel;
+    }
+
+    function papelEhClinico(clinicaId) {
+      return meuPapel(clinicaId) == "medico";
+    }
+
+    function papelEhAdminOuFinanceiro(clinicaId) {
+      return meuPapel(clinicaId) == "admin" || meuPapel(clinicaId) == "financeiro";
+    }
+
+    function souAdmin(clinicaId) {
+      return meuPapel(clinicaId) == "admin";
+    }
+
+    function mantemPapelEAtivo() {
+      return request.resource.data.papel == resource.data.papel &&
+        request.resource.data.ativo == resource.data.ativo;
+    }
+
+    // Módulos do prontuário que só médico pode criar/editar (secretaria só lê)
+    function moduloRestritoAMedico(modulo) {
+      return modulo == "condutas" || modulo == "prescricoes" || modulo == "encaminhamentos";
+    }
+
+    // ---------- /usuarios ----------
+    // Perfil global do Firebase Auth. Cada usuário só enxerga/edita o próprio.
+
+    match /usuarios/{uid} {
+      allow read, update: if autenticado() && request.auth.uid == uid;
+      allow create: if autenticado() && request.auth.uid == uid;
+      allow delete: if false; // exclusão de conta passa por Cloud Function, nunca direto do client
+    }
+
+    // ---------- /clinicas ----------
+
+    match /clinicas/{clinicaId} {
+      allow read: if souMembro(clinicaId);
+      allow create: if autenticado(); // qualquer usuário autenticado pode criar uma clínica nova (vira admin dela)
+      allow update, delete: if souAdmin(clinicaId);
+
+      // ---- membros (vínculo profissional x clínica) ----
+      match /membros/{uid} {
+        allow read: if souMembro(clinicaId);
+        allow create: if souAdmin(clinicaId) || (autenticado() && request.auth.uid == uid && !exists(/databases/$(database)/documents/clinicas/$(clinicaId)/membros/$(uid)));
+        // Cada profissional pode editar o PRÓPRIO vínculo (horários, favoritos,
+        // dados de contato) sem precisar ser admin — mas não pode mudar o
+        // próprio papel/ativo (isso continua exclusivo de admin, evita
+        // auto-promoção).
+        allow update: if souAdmin(clinicaId) || (autenticado() && request.auth.uid == uid && mantemPapelEAtivo());
+        allow delete: if souAdmin(clinicaId);
+      }
+
+      // ---- convênios ----
+      match /convenios/{id} {
+        allow read: if souMembro(clinicaId);
+        allow write: if souMembro(clinicaId) && souAdmin(clinicaId);
+      }
+
+      // ---- formulários dinâmicos (templates) ----
+      match /formularios/{id} {
+        allow read: if souMembro(clinicaId);
+        allow write: if souMembro(clinicaId);
+      }
+
+      // ---- pacientes ----
+      match /pacientes/{pacienteId} {
+        allow read, create, update: if souMembro(clinicaId);
+        allow delete: if souAdmin(clinicaId);
+
+        // Módulos do prontuário (queixas, problemas, alergias, sinaisVitais,
+        // condutas, prescricoes, encaminhamentos, examesSolicitados, imagens,
+        // formulariosRespondidos, exameFisico, historico) — cada um é uma
+        // subcoleção direta do paciente (sem pasta "prontuario" intermediária,
+        // já que o Firestore não permite coleção logo dentro de coleção).
+        match /{modulo}/{entryId} {
+          allow read: if souMembro(clinicaId);
+          allow create, update: if souMembro(clinicaId) &&
+            (!moduloRestritoAMedico(modulo) || papelEhClinico(clinicaId));
+          allow delete: if souAdmin(clinicaId);
+        }
+      }
+
+      // ---- atendimentos (coleção direta da clínica, não aninhada sob
+      // pacientes — evita depender de collectionGroup para agregações no
+      // nível da clínica, como "atendimentos deste mês" nos relatórios) ----
+      match /atendimentos/{atendimentoId} {
+        allow read, create, update: if souMembro(clinicaId);
+        allow delete: if souAdmin(clinicaId);
+      }
+
+      // ---- agendamentos ----
+      match /agendamentos/{id} {
+        allow read, create, update: if souMembro(clinicaId);
+        allow delete: if souMembro(clinicaId);
+      }
+
+      // ---- notas fiscais ----
+      match /notasFiscais/{id} {
+        allow read: if souMembro(clinicaId);
+        allow create, update: if souMembro(clinicaId) && papelEhAdminOuFinanceiro(clinicaId);
+        allow delete: if souAdmin(clinicaId);
+      }
+
+      // ---- financeiro: contas a pagar/receber (coleções diretas, mais simples
+      // que aninhar sob um documento "financeiro" que o Firestore não permite
+      // acessar como coleção) ----
+      match /contasPagar/{id} {
+        allow read, write: if souMembro(clinicaId) && papelEhAdminOuFinanceiro(clinicaId);
+      }
+      match /contasReceber/{id} {
+        allow read, write: if souMembro(clinicaId) && papelEhAdminOuFinanceiro(clinicaId);
+      }
+
+      // ---- avaliações de pacientes (pesquisa de satisfação) ----
+      match /avaliacoes/{id} {
+        allow read: if souMembro(clinicaId);
+        allow create, update: if souMembro(clinicaId);
+        allow delete: if souAdmin(clinicaId);
+      }
+
+      // ---- log de notificações (lembretes de WhatsApp, etc.) ----
+      match /notificacoes/{id} {
+        allow read, create: if souMembro(clinicaId);
+        allow update, delete: if souAdmin(clinicaId);
+      }
+    }
+
+    // ---------- /auditoria ----------
+    // Escrita SOMENTE via Cloud Function (Admin SDK ignora Security Rules).
+    // Do client, ninguém lê nem escreve diretamente.
+    match /auditoria/{logId} {
+      allow read, write: if false;
+    }
+  }
+}

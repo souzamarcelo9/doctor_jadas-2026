@@ -1,4 +1,4 @@
-# DoctorPEP — Protótipo (Release 1)
+# DoctorPEP — Release 1
 
 Protótipo de front-end para sistema de prontuário eletrônico, inspirado no DoctorPEP,
 construído para apresentação a cliente. **Esta release é um protótipo visual/funcional

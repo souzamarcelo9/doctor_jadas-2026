@@ -1,6 +1,6 @@
 # DoctorPEP — Release 1
 
-Protótipo de front-end para sistema de prontuário eletrônico, inspirado no DoctorPEP,
+Sistema de prontuário eletrônico, inspirado no DoctorPEP,
 construído para apresentação a cliente. **Esta release é um protótipo visual/funcional
 no front-end**: os dados são mockados em memória (`src/data/mockData.js`) e os recursos
 de IA e emissão de NFS-e estão **simulados** com temporizadores, para demonstrar o fluxo

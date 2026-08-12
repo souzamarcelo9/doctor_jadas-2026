@@ -21,8 +21,13 @@ export default function AIPercepcoesPanel({ open, onClose }) {
     setErro("");
     const colecao = colecaoPorTipo[sugestao.tipo];
     if (!colecao) {
-      // "alerta" não vira documento — é só um aviso pro profissional considerar.
-      setAplicadas((s) => new Set(s).add(i));
+      if (sugestao.tipo === "alerta") {
+        // "alerta" não vira documento — é só um aviso pro profissional considerar.
+        setAplicadas((s) => new Set(s).add(i));
+        return;
+      }
+      // Tipo não reconhecido — não finge sucesso, avisa que não deu pra aplicar.
+      setErro(`Sugestão com tipo desconhecido ("${sugestao.tipo}") — não foi possível aplicar automaticamente.`);
       return;
     }
     setAplicando(i);

@@ -141,6 +141,44 @@ Regras importantes:
 
   return {
     queixaResumo: typeof parsed.queixaResumo === "string" ? parsed.queixaResumo : "",
-    sugestoes: Array.isArray(parsed.sugestoes) ? parsed.sugestoes.slice(0, 5) : [],
+    sugestoes: normalizarSugestoes(parsed.sugestoes),
   };
 });
+
+const TIPOS_VALIDOS = ["problema", "conduta", "exame", "alerta"];
+
+/** O modelo às vezes devolve o "tipo" com variações (maiúscula, plural,
+ * acento) mesmo quando instruído a usar um valor fixo — normalizamos aqui,
+ * no servidor, em vez de deixar o cliente lidar com isso (e possivelmente
+ * descartar a sugestão silenciosamente sem avisar ninguém). */
+function normalizarSugestoes(sugestoes) {
+  if (!Array.isArray(sugestoes)) return [];
+  return sugestoes
+    .map((s) => {
+      if (!s || typeof s.label !== "string" || !s.label.trim()) return null;
+      const tipoNormalizado = normalizarTipo(s.tipo);
+      if (!tipoNormalizado) {
+        logger.warn(`Sugestão da IA com tipo não reconhecido, descartada: "${s.tipo}"`);
+        return null;
+      }
+      const confianca = typeof s.confianca === "number" ? Math.max(0, Math.min(1, s.confianca)) : 0.5;
+      return { tipo: tipoNormalizado, label: s.label.trim(), confianca };
+    })
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
+function normalizarTipo(tipo) {
+  if (typeof tipo !== "string") return null;
+  const limpo = tipo
+    .toLowerCase()
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, ""); // remove acentos
+  if (TIPOS_VALIDOS.includes(limpo)) return limpo;
+  if (limpo === "problemas") return "problema";
+  if (limpo === "condutas") return "conduta";
+  if (limpo === "exames" || limpo === "exame solicitado" || limpo === "exames solicitados") return "exame";
+  if (limpo === "alertas" || limpo === "atencao") return "alerta";
+  return null;
+}

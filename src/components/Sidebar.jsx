@@ -22,10 +22,10 @@ export default function Sidebar() {
     <aside className="hidden md:flex md:flex-col w-16 lg:w-56 shrink-0 bg-brand-900 text-white h-screen sticky top-0">
       <div className="h-16 flex items-center justify-center lg:justify-start lg:px-5 gap-2 border-b border-white/10">
         <div className="w-8 h-8 rounded-lg bg-brand-400 flex items-center justify-center font-display font-bold text-brand-950 text-sm">
-          DP
+          DJ
         </div>
         <span className="hidden lg:inline font-display font-semibold tracking-wide text-sm">
-          Doctor<span className="text-brand-300">PEP</span>
+          Doctor<span className="text-brand-300">JADS</span>
         </span>
       </div>
       <nav className="flex-1 py-3 overflow-y-auto">
@@ -45,7 +45,7 @@ export default function Sidebar() {
         ))}
       </nav>
       <div className="hidden lg:block px-4 py-4 text-[11px] text-brand-200/60 border-t border-white/10">
-        Protótipo v0.1 · uso interno
+        DOCTOR-JADS 2026
       </div>
     </aside>
   );

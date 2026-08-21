@@ -199,6 +199,7 @@ function SlotModal({ slot, dateISO, clinicaId, profissionalId, pacientes, onClos
         profissionalId,
         pacienteId: pacienteSel.id,
         pacienteNome: pacienteSel.nome,
+        pacienteTelefone: pacienteSel.telefone || null,
         convenioId: pacienteSel.convenioId || null,
         convenioNome: pacienteSel.convenioId || "Particular",
         dataHora: Timestamp.fromDate(d),

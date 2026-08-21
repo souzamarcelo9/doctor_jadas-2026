@@ -44,9 +44,9 @@ export default function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="hidden lg:block px-4 py-4 text-[11px] text-brand-200/60 border-t border-white/10">
+       <div className="hidden lg:block px-4 py-4 text-[11px] text-brand-200/60 border-t border-white/10">
         DOCTOR-JADS 2026
-      </div>
+      </div> 
     </aside>
   );
 }

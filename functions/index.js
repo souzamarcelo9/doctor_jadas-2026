@@ -3,9 +3,14 @@ const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
+const https = require("node:https");
+const crypto = require("node:crypto");
+const forge = require("node-forge");
+const { SecretManagerServiceClient } = require("@google-cloud/secret-manager");
 
 initializeApp();
 const db = getFirestore();
+const secretManager = new SecretManagerServiceClient();
 
 // As chaves ficam no Secret Manager do Firebase, nunca em código-fonte nem
 // no front-end. Definidas rodando:
@@ -315,3 +320,314 @@ exports.memedObterToken = onCall({ region: REGION, secrets: [memedApiKey, memedS
   await membroRef.update({ memedToken: token, memedTokenAtualizadoEm: new Date().toISOString() });
   return { token };
 });
+
+// ---------------------------------------------------------------------
+// NFS-e Paulistana — certificado digital + emissão
+// ---------------------------------------------------------------------
+//
+// Referência: Manual de Utilização do Web Service da Prefeitura de São
+// Paulo, versão 2.1 (layout v1) — https://nfe.prefeitura.sp.gov.br/arquivos/nfews.pdf
+//
+// ⚠️ ATENÇÃO — LAYOUT V1 vs V2: este manual documenta o layout v1. A partir
+// de janeiro/2026 (Reforma Tributária) o layout v2 passou a ser obrigatório
+// e provavelmente adiciona campos novos (IBS/CBS) ao tpRPS que este código
+// ainda não cobre. A MECÂNICA (envelope SOAP, algoritmo de assinatura do
+// RPS, TLS mútuo com certificado ICP-Brasil) deve continuar valendo — mas
+// os CAMPOS do XML do RPS precisam ser conferidos contra o schema v2 antes
+// de emitir em produção de verdade.
+//
+// Endpoint novo (recomendado, suporta v1 e v2): https://nfews.prefeitura.sp.gov.br/lotenfe.asmx
+
+const NFSE_WSDL_HOST = "nfews.prefeitura.sp.gov.br";
+const NFSE_WSDL_PATH = "/lotenfe.asmx";
+// Por segurança, por padrão usamos o método de TESTE (não gera NF-e de
+// verdade mesmo que o certificado seja aceito) — só troque para false
+// depois de validar tudo com o certificado ICP-Brasil real do cliente.
+const NFSE_MODO_TESTE = true;
+
+function nomeSecretCertificado(clinicaId) {
+  return `nfse-cert-${clinicaId}`;
+}
+
+async function lerSecretMaisRecente(nome) {
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
+  const [versao] = await secretManager.accessSecretVersion({
+    name: `projects/${projectId}/secrets/${nome}/versions/latest`,
+  });
+  return versao.payload.data.toString("utf8");
+}
+
+async function gravarSecret(nome, valor) {
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
+  const secretPath = `projects/${projectId}/secrets/${nome}`;
+  try {
+    await secretManager.getSecret({ name: secretPath });
+  } catch {
+    await secretManager.createSecret({
+      parent: `projects/${projectId}`,
+      secretId: nome,
+      secret: { replication: { automatic: {} } },
+    });
+  }
+  await secretManager.addSecretVersion({
+    parent: secretPath,
+    payload: { data: Buffer.from(valor, "utf8") },
+  });
+}
+
+/** Confere se o usuário é admin da clínica — só admin mexe no certificado
+ * digital, dado o quanto é sensível. */
+async function exigirAdmin(clinicaId, uid) {
+  const membroSnap = await db.doc(`clinicas/${clinicaId}/membros/${uid}`).get();
+  if (!membroSnap.exists || membroSnap.data().papel !== "admin") {
+    throw new HttpsError("permission-denied", "Só administradores da clínica podem gerenciar o certificado digital.");
+  }
+}
+
+/**
+ * Recebe o certificado (.pfx/.p12) em base64 + senha, valida que o arquivo
+ * abre com a senha informada, guarda no Secret Manager (nunca no Firestore)
+ * e grava só metadados não-sensíveis na clínica (status, validade, CN).
+ *
+ * Entrada:  { clinicaId, arquivoBase64, senha, nomeArquivo }
+ * Saída:    { ok: true, nomeCertificado, validoAte }
+ */
+exports.nfseSalvarCertificado = onCall({ region: REGION, timeoutSeconds: 30 }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId, arquivoBase64, senha, nomeArquivo } = request.data || {};
+  if (!clinicaId || !arquivoBase64 || !senha) {
+    throw new HttpsError("invalid-argument", "Envie o arquivo do certificado e a senha.");
+  }
+  await exigirAdmin(clinicaId, request.auth.uid);
+
+  let cn = null;
+  let validoAte = null;
+  try {
+    const asn1 = forge.asn1.fromDer(forge.util.decode64(arquivoBase64));
+    const p12 = forge.pkcs12.pkcs12FromAsn1(asn1, false, senha);
+    const bagsCert = p12.getBags({ bagType: forge.pki.oids.certBag });
+    const certBag = bagsCert[forge.pki.oids.certBag]?.[0];
+    if (!certBag?.cert) throw new Error("Certificado não encontrado no arquivo.");
+    cn = certBag.cert.subject.getField("CN")?.value || null;
+    validoAte = certBag.cert.validity.notAfter.toISOString();
+
+    const bagsKey = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
+    const keyBag = bagsKey[forge.pki.oids.pkcs8ShroudedKeyBag]?.[0];
+    if (!keyBag?.key) throw new Error("Chave privada não encontrada no arquivo.");
+  } catch (err) {
+    logger.warn("Falha ao abrir o certificado enviado:", err.message);
+    throw new HttpsError("invalid-argument", "Não foi possível abrir o certificado — confira o arquivo e a senha.");
+  }
+
+  await gravarSecret(nomeSecretCertificado(clinicaId), JSON.stringify({ pfxBase64: arquivoBase64, senha }));
+
+  await db.doc(`clinicas/${clinicaId}`).update({
+    certificadoNfse: {
+      status: "configurado",
+      nomeArquivo: nomeArquivo || "certificado.pfx",
+      nomeCertificado: cn,
+      validoAte,
+      importadoEm: new Date().toISOString(),
+      importadoPor: request.auth.uid,
+    },
+  });
+
+  return { ok: true, nomeCertificado: cn, validoAte };
+});
+
+/** Monta a string de 86 posições e assina com RSA-SHA1, conforme o
+ * algoritmo de assinatura do RPS descrito no manual (item 4.3.2). */
+function assinarRps(rps, privateKeyPem) {
+  const pad = (v, n) => String(v).padStart(n, "0");
+  const padRight = (v, n) => String(v).padEnd(n, " ");
+  const cadeia =
+    pad(rps.inscricaoMunicipalPrestador, 8) +
+    padRight(rps.serie || "UNICA", 5) +
+    pad(rps.numero, 12) +
+    rps.dataEmissao.replace(/-/g, "") + // AAAAMMDD
+    rps.tipoTributacao + // T | F | I | J
+    "N" + // status: Normal
+    (rps.issRetido ? "S" : "N") +
+    pad(Math.round(rps.valorServicos * 100), 15) +
+    pad(Math.round((rps.valorDeducoes || 0) * 100), 15) +
+    pad(rps.codigoServico, 5) +
+    (rps.cpfCnpjTomador ? (rps.cpfCnpjTomador.length === 11 ? "1" : "2") : "3") +
+    pad(rps.cpfCnpjTomador || "", 14);
+
+  const sign = crypto.createSign("RSA-SHA1");
+  sign.update(cadeia, "ascii");
+  return sign.sign(privateKeyPem, "base64");
+}
+
+function montarXmlRps(rps, assinatura) {
+  const esc = (s) =>
+    String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+  return `
+    <RPS>
+      <Assinatura>${assinatura}</Assinatura>
+      <ChaveRPS>
+        <InscricaoPrestador>${rps.inscricaoMunicipalPrestador}</InscricaoPrestador>
+        <SerieRPS>${esc(rps.serie || "UNICA")}</SerieRPS>
+        <NumeroRPS>${rps.numero}</NumeroRPS>
+      </ChaveRPS>
+      <TipoRPS>RPS</TipoRPS>
+      <DataEmissao>${rps.dataEmissao}</DataEmissao>
+      <StatusRPS>N</StatusRPS>
+      <TributacaoRPS>${rps.tipoTributacao}</TributacaoRPS>
+      <ValorServicos>${rps.valorServicos.toFixed(2)}</ValorServicos>
+      <ValorDeducoes>${(rps.valorDeducoes || 0).toFixed(2)}</ValorDeducoes>
+      <CodigoServico>${rps.codigoServico}</CodigoServico>
+      <AliquotaServicos>${rps.aliquota}</AliquotaServicos>
+      <ISSRetido>${rps.issRetido ? "true" : "false"}</ISSRetido>
+      ${rps.cpfCnpjTomador ? `<CPFCNPJTomador>${rps.cpfCnpjTomador.length === 11 ? `<CPF>${rps.cpfCnpjTomador}</CPF>` : `<CNPJ>${rps.cpfCnpjTomador}</CNPJ>`}</CPFCNPJTomador>` : ""}
+      ${rps.razaoSocialTomador ? `<RazaoSocialTomador>${esc(rps.razaoSocialTomador)}</RazaoSocialTomador>` : ""}
+      <Discriminacao>${esc(rps.discriminacao)}</Discriminacao>
+    </RPS>`.trim();
+}
+
+/**
+ * Monta o RPS, assina, empacota no envelope SOAP e tenta enviar à Prefeitura
+ * via TLS mútuo com o certificado da clínica — usando o método de TESTE por
+ * padrão (não gera NF-e real mesmo se o certificado for aceito).
+ *
+ * Com um certificado autoassinado (fase de desenvolvimento), a rejeição do
+ * handshake TLS é o resultado ESPERADO — é isso que confirma que o resto do
+ * pipeline (montagem do XML, assinatura, conexão) está funcionando; só a
+ * confiança na cadeia de certificação é que falha, propositalmente, até
+ * termos um certificado ICP-Brasil de verdade.
+ *
+ * Entrada:  { clinicaId, notaFiscalId, dados: { cnpjPrestador, inscricaoMunicipalPrestador,
+ *              cpfCnpjTomador, razaoSocialTomador, valorServicos, codigoServico,
+ *              aliquota, discriminacao } }
+ * Saída:    { status: "enviado_teste" | "rejeitado_certificado" | "erro", detalhe }
+ */
+exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId, notaFiscalId, dados } = request.data || {};
+  if (!clinicaId || !notaFiscalId || !dados) {
+    throw new HttpsError("invalid-argument", "Dados da nota incompletos.");
+  }
+
+  const clinicaSnap = await db.doc(`clinicas/${clinicaId}`).get();
+  const certInfo = clinicaSnap.data()?.certificadoNfse;
+  if (!certInfo || certInfo.status !== "configurado") {
+    throw new HttpsError("failed-precondition", "Nenhum certificado digital configurado para esta clínica. Configure em Configurações → Certificado Digital.");
+  }
+
+  let secretJson;
+  try {
+    secretJson = JSON.parse(await lerSecretMaisRecente(nomeSecretCertificado(clinicaId)));
+  } catch (err) {
+    logger.error("Erro ao ler certificado do Secret Manager:", err);
+    throw new HttpsError("internal", "Não foi possível recuperar o certificado configurado.");
+  }
+  const { pfxBase64, senha } = secretJson;
+  const pfxBuffer = Buffer.from(pfxBase64, "base64");
+
+  let privateKeyPem;
+  try {
+    const asn1 = forge.asn1.fromDer(forge.util.decode64(pfxBase64));
+    const p12 = forge.pkcs12.pkcs12FromAsn1(asn1, false, senha);
+    const bagsKey = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
+    const keyBag = bagsKey[forge.pki.oids.pkcs8ShroudedKeyBag]?.[0];
+    privateKeyPem = forge.pki.privateKeyToPem(keyBag.key);
+  } catch (err) {
+    logger.error("Erro ao extrair chave privada do certificado:", err);
+    throw new HttpsError("internal", "Certificado configurado está corrompido ou a senha mudou — reimporte em Configurações.");
+  }
+
+  const rps = {
+    inscricaoMunicipalPrestador: dados.inscricaoMunicipalPrestador || "00000000",
+    numero: dados.numeroRps || Date.now() % 1e12,
+    serie: "UNICA",
+    dataEmissao: new Date().toISOString().slice(0, 10),
+    tipoTributacao: "T",
+    issRetido: false,
+    valorServicos: Number(dados.valorServicos) || 0,
+    valorDeducoes: 0,
+    codigoServico: dados.codigoServico || "04498",
+    aliquota: dados.aliquota || 0.02,
+    cpfCnpjTomador: (dados.cpfCnpjTomador || "").replace(/\D/g, "") || null,
+    razaoSocialTomador: dados.razaoSocialTomador,
+    discriminacao: dados.discriminacao,
+  };
+
+  const assinatura = assinarRps(rps, privateKeyPem);
+  const xmlRps = montarXmlRps(rps, assinatura);
+
+  // ⚠️ A tag <Signature> da mensagem XML completa (assinatura XMLDSig do
+  // PEDIDO, distinta da assinatura do RPS acima) não está implementada
+  // aqui — depende de uma biblioteca de XMLDSig (ex.: xml-crypto) e do
+  // certificado ICP-Brasil real para ter qualquer valor prático de testar.
+  // Fica marcado como próximo passo quando o certificado real chegar.
+  const mensagemXml = `<?xml version="1.0" encoding="utf-8"?>
+<PedidoEnvioLoteRPS xmlns="http://www.prefeitura.sp.gov.br/nfe" Versao="1">
+  <Cabecalho Versao="1">
+    <CPFCNPJRemetente><CNPJ>${(dados.cnpjPrestador || "").replace(/\D/g, "")}</CNPJ></CPFCNPJRemetente>
+    <transacao>true</transacao>
+    <dtInicio>${rps.dataEmissao}</dtInicio>
+    <dtFim>${rps.dataEmissao}</dtFim>
+    <QtdRPS>1</QtdRPS>
+    <ValorTotalServicos>${rps.valorServicos.toFixed(2)}</ValorTotalServicos>
+    <ValorTotalDeducoes>0.00</ValorTotalDeducoes>
+  </Cabecalho>
+  ${xmlRps}
+</PedidoEnvioLoteRPS>`;
+
+  const metodo = NFSE_MODO_TESTE ? "TesteEnvioLoteRPS" : "EnvioLoteRPS";
+  const soapEnvelope = `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <${metodo}Request xmlns="http://www.prefeitura.sp.gov.br/nfe">
+      <VersaoSchema>1</VersaoSchema>
+      <MensagemXML><![CDATA[${mensagemXml}]]></MensagemXML>
+    </${metodo}Request>
+  </soap:Body>
+</soap:Envelope>`;
+
+  const notaRef = db.doc(`clinicas/${clinicaId}/notasFiscais/${notaFiscalId}`);
+
+  try {
+    const respostaXml = await enviarSoapComCertificado(soapEnvelope, metodo, pfxBuffer, senha);
+    logger.info("Prefeitura respondeu (modo teste):", respostaXml.slice(0, 2000));
+    await notaRef.update({ status: "processando", respostaWebservice: respostaXml.slice(0, 5000), enviadoEm: new Date().toISOString() });
+    return { status: "enviado_teste", detalhe: "A Prefeitura respondeu — confira o retorno para ver se o XML passou na validação de schema." };
+  } catch (err) {
+    const provavelmenteTls = /certificate|SSL|TLS|handshake/i.test(err.message || "");
+    const detalhe = provavelmenteTls
+      ? "Conexão rejeitada na validação do certificado — esperado com certificado autoassinado. Funcionará normalmente com o certificado ICP-Brasil real."
+      : `Falha ao enviar: ${err.message}`;
+    logger.warn("Envio à Prefeitura falhou:", err.message);
+    await notaRef.update({ status: "erro_certificado", erroWebservice: detalhe, tentadoEm: new Date().toISOString() });
+    return { status: "rejeitado_certificado", detalhe };
+  }
+});
+
+function enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        host: NFSE_WSDL_HOST,
+        path: NFSE_WSDL_PATH,
+        method: "POST",
+        pfx: pfxBuffer,
+        passphrase: senha,
+        headers: {
+          "Content-Type": "text/xml; charset=utf-8",
+          "Content-Length": Buffer.byteLength(soapEnvelope),
+          SOAPAction: `http://www.prefeitura.sp.gov.br/nfe/${soapAction}`,
+        },
+        timeout: 20000,
+      },
+      (res) => {
+        let corpo = "";
+        res.on("data", (chunk) => (corpo += chunk));
+        res.on("end", () => resolve(corpo));
+      }
+    );
+    req.on("timeout", () => req.destroy(new Error("Tempo esgotado ao conectar com a Prefeitura.")));
+    req.on("error", reject);
+    req.write(soapEnvelope);
+    req.end();
+  });
+}

@@ -3,6 +3,7 @@ import { Timestamp } from "firebase/firestore";
 import { MessageCircle, FileText, BellRing, Send, CheckCheck, Clock3, Loader2, AlertTriangle, ExternalLink } from "lucide-react";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreQuery, useFirestoreCollection, where, orderBy, criarDocumento } from "../../lib/firestore";
+import { paraFormatoWhatsapp, montarMensagemConfirmacao, montarMensagemFormulario } from "../../lib/whatsapp";
 
 const statusMap = {
   confirmado: { label: "Confirmado", tone: "bg-emerald-100 text-emerald-700" },
@@ -19,26 +20,8 @@ function inicioFimHoje() {
   return [Timestamp.fromDate(ini), Timestamp.fromDate(fim)];
 }
 
-/** Normaliza um telefone brasileiro para o formato que o wa.me espera:
- * só dígitos, com código do país (55) na frente. */
-function paraFormatoWhatsapp(telefone) {
-  if (!telefone) return null;
-  const digitos = telefone.replace(/\D/g, "");
-  if (!digitos) return null;
-  if (digitos.startsWith("55") && digitos.length >= 12) return digitos;
-  return `55${digitos}`;
-}
-
 function montarMensagem(ag, tipo) {
-  const dataHora = ag.dataHora?.toDate?.();
-  const dataFmt = dataHora ? dataHora.toLocaleDateString("pt-BR") : "";
-  const horaFmt = dataHora ? dataHora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
-  const primeiroNome = (ag.pacienteNome || "").split(" ")[0];
-
-  if (tipo === "formulario") {
-    return `Olá, ${primeiroNome}! Para agilizar sua consulta do dia ${dataFmt} às ${horaFmt}, pedimos que preencha o formulário de anamnese que enviaremos em seguida. Qualquer dúvida, estamos à disposição.`;
-  }
-  return `Olá, ${primeiroNome}! Passando para lembrar da sua consulta marcada para ${dataFmt} às ${horaFmt}. Poderia confirmar sua presença respondendo esta mensagem? Obrigado!`;
+  return tipo === "formulario" ? montarMensagemFormulario(ag) : montarMensagemConfirmacao(ag);
 }
 
 export default function AgendaWhatsapp() {

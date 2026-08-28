@@ -2,12 +2,13 @@ import { useMemo, useState } from "react";
 import { Timestamp } from "firebase/firestore";
 import {
   ChevronLeft, ChevronRight, Users, PieChart, XCircle, Clock, Armchair, Lock,
-  Stethoscope, UserCheck, CalendarCheck, RefreshCw, Settings2, Loader2, X, Search,
+  Stethoscope, UserCheck, CalendarCheck, RefreshCw, Settings2, Loader2,
 } from "lucide-react";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreDoc, useFirestoreCollection } from "../../lib/firestore";
-import { useFirestoreQuery, where, criarDocumento, atualizarDocumento } from "../../lib/firestore";
+import { useFirestoreQuery, where } from "../../lib/firestore";
 import { useNavigate } from "react-router-dom";
+import AgendamentoModal from "./AgendamentoModal";
 
 const diasSemanaChave = ["domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"];
 
@@ -166,7 +167,7 @@ export default function AgendaGrid({ onOpenHorarios }) {
       </div>
 
       {modalSlot && (
-        <SlotModal
+        <AgendamentoModal
           slot={modalSlot}
           dateISO={dateISO}
           clinicaId={clinicaId}
@@ -176,100 +177,6 @@ export default function AgendaGrid({ onOpenHorarios }) {
           onIrParaAtendimento={(pacienteId) => navigate(`/atendimento/${pacienteId}`)}
         />
       )}
-    </div>
-  );
-}
-
-function SlotModal({ slot, dateISO, clinicaId, profissionalId, pacientes, onClose, onIrParaAtendimento }) {
-  const [busca, setBusca] = useState("");
-  const [pacienteSel, setPacienteSel] = useState(null);
-  const [tipo, setTipo] = useState("CONSULTA");
-  const [salvando, setSalvando] = useState(false);
-
-  const filtrados = pacientes.filter((p) => p.nome?.toLowerCase().includes(busca.toLowerCase()));
-
-  async function agendar() {
-    if (!pacienteSel) return;
-    setSalvando(true);
-    try {
-      const [h, m] = slot.hora.split(":").map(Number);
-      const d = new Date(`${dateISO}T00:00:00`);
-      d.setHours(h, m, 0, 0);
-      await criarDocumento(`clinicas/${clinicaId}/agendamentos`, {
-        profissionalId,
-        pacienteId: pacienteSel.id,
-        pacienteNome: pacienteSel.nome,
-        pacienteTelefone: pacienteSel.telefone || null,
-        convenioId: pacienteSel.convenioId || null,
-        convenioNome: pacienteSel.convenioId || "Particular",
-        dataHora: Timestamp.fromDate(d),
-        duracaoMinutos: 30,
-        status: "agendado",
-        tipoAtendimento: tipo,
-      });
-      onClose();
-    } finally {
-      setSalvando(false);
-    }
-  }
-
-  async function mudarStatus(novoStatus) {
-    await atualizarDocumento(`clinicas/${clinicaId}/agendamentos`, slot.agendamento.id, { status: novoStatus });
-    onClose();
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink-900/40" onClick={onClose} />
-      <div className="relative bg-white w-full max-w-sm rounded-xl2 shadow-pop overflow-hidden animate-slideIn">
-        <div className="flex items-center justify-between px-5 py-4 bg-brand-600 text-white">
-          <span className="font-display font-semibold">{slot.hora} · {dateISO.split("-").reverse().join("/")}</span>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/15 focus-ring"><X size={18} /></button>
-        </div>
-
-        {!slot.agendamento ? (
-          <div className="p-5 space-y-3">
-            <div className="relative">
-              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-500" />
-              <input value={busca} onChange={(e) => { setBusca(e.target.value); setPacienteSel(null); }} placeholder="Buscar paciente…" className="w-full text-sm border border-black/10 rounded-lg pl-8 pr-3 py-2 focus-ring" />
-            </div>
-            {busca && !pacienteSel && (
-              <div className="max-h-40 overflow-y-auto border border-black/10 rounded-lg divide-y divide-black/5">
-                {filtrados.length === 0 && <p className="text-xs text-ink-500 p-3">Nenhum paciente encontrado.</p>}
-                {filtrados.map((p) => (
-                  <button key={p.id} onClick={() => { setPacienteSel(p); setBusca(p.nome); }} className="w-full text-left text-xs px-3 py-2 hover:bg-brand-50 focus-ring">
-                    {p.nome}
-                  </button>
-                ))}
-              </div>
-            )}
-            <label className="block text-xs">
-              <span className="text-ink-500 font-medium">Tipo de atendimento</span>
-              <select value={tipo} onChange={(e) => setTipo(e.target.value)} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring">
-                <option>CONSULTA</option><option>RETORNO</option><option>PROCEDIMENTO</option>
-              </select>
-            </label>
-            <button onClick={agendar} disabled={!pacienteSel || salvando} className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring">
-              {salvando && <Loader2 size={15} className="animate-spin" />} Agendar
-            </button>
-          </div>
-        ) : (
-          <div className="p-5 space-y-3">
-            <div className="text-sm font-semibold text-ink-900">{slot.agendamento.pacienteNome}</div>
-            <div className="text-xs text-ink-500">{slot.agendamento.tipoAtendimento} · {slot.agendamento.convenioNome}</div>
-            <div className="grid grid-cols-2 gap-2 pt-2">
-              {["confirmado", "presente", "atendendo", "faltou", "cancelado"].map((s) => (
-                <button key={s} onClick={() => mudarStatus(s)} className="text-xs font-semibold border border-black/10 hover:bg-brand-50 rounded-lg py-2 capitalize focus-ring">
-                  {s}
-                </button>
-              ))}
-            </div>
-            <button onClick={() => onIrParaAtendimento(slot.agendamento.pacienteId)} className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring mt-2">
-              Ir para o atendimento
-            </button>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

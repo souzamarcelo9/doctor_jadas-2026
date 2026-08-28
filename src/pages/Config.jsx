@@ -1,6 +1,7 @@
 import { useState } from "react";
 import Topbar from "../components/Topbar";
 import PreferenciasModal from "../components/PreferenciasModal";
+import CertificadoDigitalModal from "../components/CertificadoDigitalModal";
 import { SlidersHorizontal, FileSignature, ListTodo, UserCog, FileText } from "lucide-react";
 
 const cards = [
@@ -13,6 +14,13 @@ const cards = [
 
 export default function Config() {
   const [openPref, setOpenPref] = useState(false);
+  const [openCert, setOpenCert] = useState(false);
+
+  function handleClick(title) {
+    if (title === "Preferências") setOpenPref(true);
+    if (title === "Certificado Digital") setOpenCert(true);
+  }
+
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <Topbar title="Configurações" />
@@ -21,7 +29,7 @@ export default function Config() {
           {cards.map(({ icon: Icon, title, desc }) => (
             <button
               key={title}
-              onClick={() => title === "Preferências" && setOpenPref(true)}
+              onClick={() => handleClick(title)}
               className="card p-4 text-left hover:shadow-pop transition-shadow focus-ring"
             >
               <div className="w-10 h-10 rounded-xl bg-brand-50 text-brand-600 flex items-center justify-center mb-2.5">
@@ -34,6 +42,7 @@ export default function Config() {
         </div>
       </main>
       <PreferenciasModal open={openPref} onClose={() => setOpenPref(false)} />
+      <CertificadoDigitalModal open={openCert} onClose={() => setOpenCert(false)} />
     </div>
   );
 }

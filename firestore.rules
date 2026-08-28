@@ -74,6 +74,14 @@ service cloud.firestore {
         allow write: if souMembro(clinicaId) && souAdmin(clinicaId);
       }
 
+      // ---- serviços (catálogo de consultas/procedimentos e seus valores,
+      // usado no agendamento para preencher o valor automaticamente e
+      // alimentar o financeiro) ----
+      match /servicos/{id} {
+        allow read: if souMembro(clinicaId);
+        allow write: if souMembro(clinicaId) && souAdmin(clinicaId);
+      }
+
       // ---- formulários dinâmicos (templates) ----
       match /formularios/{id} {
         allow read: if souMembro(clinicaId);
@@ -126,7 +134,13 @@ service cloud.firestore {
         allow read, write: if souMembro(clinicaId) && papelEhAdminOuFinanceiro(clinicaId);
       }
       match /contasReceber/{id} {
-        allow read, write: if souMembro(clinicaId) && papelEhAdminOuFinanceiro(clinicaId);
+        // Criação liberada para qualquer membro: é o que permite o
+        // agendamento (feito por secretária, por exemplo) lançar o valor do
+        // serviço automaticamente no financeiro, sem exigir papel
+        // admin/financeiro só para marcar uma consulta. Leitura, edição
+        // (ex: marcar como pago) e exclusão continuam restritas.
+        allow create: if souMembro(clinicaId);
+        allow read, update, delete: if souMembro(clinicaId) && papelEhAdminOuFinanceiro(clinicaId);
       }
 
       // ---- avaliações de pacientes (pesquisa de satisfação) ----

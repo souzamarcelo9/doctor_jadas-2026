@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, useLocation, Navigate } from "react-router-dom";
+import { useNavigate, useLocation, Navigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { Mail, Lock, Eye, EyeOff, LogIn, AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 
@@ -154,6 +154,9 @@ export default function Login() {
 
           <p className="text-[11px] text-ink-500 mt-6 text-center">
             Ao continuar, você concorda com os Termos de Uso e a Política de Privacidade da clínica.
+          </p>
+          <p className="text-xs text-ink-500 mt-3 text-center">
+            Ainda não tem conta? <Link to="/cadastro" className="text-brand-600 hover:text-brand-700 font-medium">Criar conta</Link>
           </p>
         </div>
       </div>

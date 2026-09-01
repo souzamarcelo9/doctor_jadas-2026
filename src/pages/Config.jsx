@@ -2,6 +2,7 @@ import { useState } from "react";
 import Topbar from "../components/Topbar";
 import PreferenciasModal from "../components/PreferenciasModal";
 import CertificadoDigitalModal from "../components/CertificadoDigitalModal";
+import EditarUsuarioModal from "../components/EditarUsuarioModal";
 import { SlidersHorizontal, FileSignature, ListTodo, UserCog, FileText } from "lucide-react";
 
 const cards = [
@@ -15,10 +16,12 @@ const cards = [
 export default function Config() {
   const [openPref, setOpenPref] = useState(false);
   const [openCert, setOpenCert] = useState(false);
+  const [openUsuario, setOpenUsuario] = useState(false);
 
   function handleClick(title) {
     if (title === "Preferências") setOpenPref(true);
     if (title === "Certificado Digital") setOpenCert(true);
+    if (title === "Editar Usuário") setOpenUsuario(true);
   }
 
   return (
@@ -43,6 +46,7 @@ export default function Config() {
       </main>
       <PreferenciasModal open={openPref} onClose={() => setOpenPref(false)} />
       <CertificadoDigitalModal open={openCert} onClose={() => setOpenCert(false)} />
+      <EditarUsuarioModal open={openUsuario} onClose={() => setOpenUsuario(false)} />
     </div>
   );
 }

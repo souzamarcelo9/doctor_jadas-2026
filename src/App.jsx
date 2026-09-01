@@ -4,6 +4,8 @@ import { TenantProvider } from "./context/TenantContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Sidebar from "./components/Sidebar";
 import Login from "./pages/Login";
+import Cadastro from "./pages/Cadastro";
+import Onboarding from "./pages/Onboarding";
 import Dashboard from "./pages/Dashboard";
 import Agenda from "./pages/Agenda";
 import Pacientes from "./pages/Pacientes";
@@ -14,6 +16,7 @@ import Config from "./pages/Config";
 import Financeiro from "./pages/Financeiro";
 import Relatorios from "./pages/Relatorios";
 import Placeholder from "./pages/Placeholder";
+import AssinaturasPendentes from "./pages/AssinaturasPendentes";
 
 function AppLayout() {
   return (
@@ -34,6 +37,8 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/cadastro" element={<Cadastro />} />
+          <Route path="/onboarding" element={<ProtectedRoute><Onboarding /></ProtectedRoute>} />
           <Route element={<AppLayout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/agenda" element={<Agenda />} />
@@ -45,7 +50,7 @@ export default function App() {
             <Route path="/relatorios" element={<Relatorios />} />
             <Route path="/financeiro" element={<Financeiro />} />
             <Route path="/tarefas" element={<Placeholder title="Tarefas" />} />
-            <Route path="/assinaturas" element={<Placeholder title="Assinaturas Pendentes" />} />
+            <Route path="/assinaturas" element={<AssinaturasPendentes />} />
             <Route path="*" element={<Placeholder title="Página não encontrada" />} />
           </Route>
         </Routes>

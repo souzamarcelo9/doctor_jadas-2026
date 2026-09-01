@@ -1,14 +1,16 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, useCallback } from "react";
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  updateProfile,
   signOut as firebaseSignOut,
   sendPasswordResetEmail,
   setPersistence,
   browserLocalPersistence,
   browserSessionPersistence,
 } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 import { auth, db, firebaseConfigured } from "../firebase";
 
 const AuthContext = createContext(null);
@@ -39,16 +41,7 @@ export function AuthProvider({ children }) {
         } catch {
           setProfile(null);
         }
-        try {
-          // force refresh na primeira leitura pós-login evita ficar preso a um
-          // token em cache que ainda não tem o claim mais recente (ex: logo
-          // depois de rodar o seed e ganhar acesso a uma clínica nova).
-          const token = await firebaseUser.getIdTokenResult(true);
-          setClinicaIds(token.claims?.clinicas || []);
-        } catch (err) {
-          console.error("Erro ao ler custom claims:", err);
-          setClinicaIds([]);
-        }
+        await lerClaims(firebaseUser);
       } else {
         setProfile(null);
         setClinicaIds([]);
@@ -57,6 +50,48 @@ export function AuthProvider({ children }) {
     });
     return unsub;
   }, []);
+
+  async function lerClaims(firebaseUser) {
+    try {
+      // force refresh evita ficar preso a um token em cache que ainda não
+      // tem o claim mais recente (ex: logo depois de criar/entrar numa
+      // clínica nova pelo onboarding).
+      const token = await firebaseUser.getIdTokenResult(true);
+      setClinicaIds(token.claims?.clinicas || []);
+      return token.claims?.clinicas || [];
+    } catch (err) {
+      console.error("Erro ao ler custom claims:", err);
+      setClinicaIds([]);
+      return [];
+    }
+  }
+
+  /** Rechama a leitura do token depois que uma Cloud Function (ex:
+   * criarClinica) acabou de mudar o custom claim `clinicas` do usuário —
+   * sem isso, o app continuaria usando o claim antigo (sem a clínica nova)
+   * até o token expirar sozinho. */
+  const refrescarClaims = useCallback(async () => {
+    if (!auth.currentUser) return [];
+    return lerClaims(auth.currentUser);
+  }, []);
+
+  async function signup(email, password, nome) {
+    if (!firebaseConfigured) {
+      throw new Error(
+        "Firebase ainda não configurado. Preencha o arquivo .env com as credenciais do seu projeto (veja .env.example)."
+      );
+    }
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
+    if (nome) {
+      await updateProfile(cred.user, { displayName: nome });
+    }
+    await setDoc(doc(db, "usuarios", cred.user.uid), {
+      nome: nome || email,
+      email,
+      criadoEm: new Date().toISOString(),
+    });
+    return cred;
+  }
 
   async function login(email, password, remember) {
     if (!firebaseConfigured) {
@@ -79,7 +114,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, clinicaIds, loading, login, logout, resetPassword, firebaseConfigured }}>
+    <AuthContext.Provider value={{ user, profile, clinicaIds, loading, login, signup, logout, resetPassword, refrescarClaims, firebaseConfigured }}>
       {children}
     </AuthContext.Provider>
   );

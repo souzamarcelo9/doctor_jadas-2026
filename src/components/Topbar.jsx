@@ -2,16 +2,21 @@ import { useState } from "react";
 import { Bell, HelpCircle, ThumbsUp, Maximize2, LogOut, ChevronDown } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { useTenant } from "../context/TenantContext";
+import { useFirestoreDoc } from "../lib/firestore";
 import ClinicSwitcher from "./ClinicSwitcher";
 import { currentUser as demoUser } from "../data/mockData";
 
 export default function Topbar({ title, timer }) {
   const { user, profile, logout, firebaseConfigured } = useAuth();
+  const { clinicaId, profissionalId } = useTenant();
+  const { data: membro } = useFirestoreDoc(clinicaId ? `clinicas/${clinicaId}/membros` : null, profissionalId);
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const displayName = profile?.nome || user?.displayName || user?.email || demoUser.name;
+  const displayName = membro?.nome || profile?.nome || user?.displayName || user?.email || demoUser.name;
   const displayStatus = firebaseConfigured ? (profile?.status || "Disponível") : `${demoUser.status} (modo demo)`;
+  const fotoUrl = membro?.fotoUrl || "";
   const initials = displayName
     .split(" ")
     .map((w) => w[0])
@@ -55,8 +60,8 @@ export default function Topbar({ title, timer }) {
             onClick={() => setMenuOpen((o) => !o)}
             className="flex items-center gap-2 pl-2 lg:pl-3 border-l border-black/10 focus-ring rounded-lg"
           >
-            <div className="w-8 h-8 rounded-full bg-brand-500 text-white flex items-center justify-center text-xs font-semibold shrink-0">
-              {initials}
+            <div className="w-8 h-8 rounded-full bg-brand-500 text-white flex items-center justify-center text-xs font-semibold shrink-0 overflow-hidden">
+              {fotoUrl ? <img src={fotoUrl} alt="" className="w-full h-full object-cover" /> : initials}
             </div>
             <div className="hidden sm:block leading-tight text-left">
               <div className="text-xs font-semibold text-ink-900 max-w-[140px] truncate">{displayName}</div>

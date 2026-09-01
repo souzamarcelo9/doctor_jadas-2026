@@ -2,7 +2,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { initializeApp } = require("firebase-admin/app");
-const { getFirestore } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const https = require("node:https");
 const crypto = require("node:crypto");
 const forge = require("node-forge");
@@ -636,3 +636,280 @@ function enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha) {
     req.end();
   });
 }
+
+// ---------------------------------------------------------------------
+// Assinaturas Pendentes — assinatura digital de documentos clínicos
+// ---------------------------------------------------------------------
+//
+// ⚠️ LIMITAÇÃO CONHECIDA: isto gera uma assinatura RSA-SHA256 real sobre o
+// conteúdo do documento, usando a chave privada do certificado .pfx/.p12 já
+// configurado em Configurações → Certificado Digital (o mesmo certificado
+// usado pra NFS-e). Isso prova integridade + posse da chave privada da
+// CLÍNICA, mas NÃO produz um envelope CAdES/PAdES no padrão ICP-Brasil, e o
+// certificado é da clínica, não um e-CPF individual do médico. Não deve ser
+// tratado como equivalente legal a uma assinatura ICP-Brasil em documentos
+// que exigem validade jurídica plena (atestados, receitas de controle
+// especial). Para isso, evoluir para PAdES/CAdES com certificado por médico.
+
+const MODULOS_ASSINAVEIS = ["condutas", "prescricoes", "encaminhamentos"];
+
+// Cada módulo do prontuário guarda o conteúdo em campos diferentes — não
+// existe um `texto` único (ver Conduta.jsx, Prescricoes.jsx,
+// Encaminhamento.jsx). Esta função monta a representação textual que
+// efetivamente vai pro hash/assinatura de cada tipo de documento.
+function conteudoDoDocumento(modulo, documento) {
+  if (modulo === "condutas") return documento.texto || "";
+  if (modulo === "prescricoes") return `${documento.medicamento || ""} — ${documento.posologia || ""}`;
+  if (modulo === "encaminhamentos") return `${documento.especialidade || ""}: ${documento.motivo || ""}`;
+  return "";
+}
+
+/**
+ * Entrada:  { clinicaId, pacienteId, modulo: "condutas"|"prescricoes"|"encaminhamentos", documentoId }
+ * Saída:    { ok: true, assinadoEm, certificadoCn }
+ */
+exports.assinarDocumento = onCall({ region: REGION, timeoutSeconds: 30 }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId, pacienteId, modulo, documentoId } = request.data || {};
+  if (!clinicaId || !pacienteId || !modulo || !documentoId || !MODULOS_ASSINAVEIS.includes(modulo)) {
+    throw new HttpsError("invalid-argument", "Dados incompletos para assinatura.");
+  }
+
+  const uid = request.auth.uid;
+  const membroSnap = await db.doc(`clinicas/${clinicaId}/membros/${uid}`).get();
+  if (!membroSnap.exists || membroSnap.data().papel !== "medico") {
+    throw new HttpsError("permission-denied", "Só o médico responsável pode assinar documentos clínicos.");
+  }
+
+  const docRef = db.doc(`clinicas/${clinicaId}/pacientes/${pacienteId}/${modulo}/${documentoId}`);
+  const docSnap = await docRef.get();
+  if (!docSnap.exists) throw new HttpsError("not-found", "Documento não encontrado.");
+  const documento = docSnap.data();
+  if (documento.assinatura?.status === "assinado") {
+    throw new HttpsError("failed-precondition", "Este documento já foi assinado.");
+  }
+  if (documento.profissionalId !== uid) {
+    throw new HttpsError("permission-denied", "Só quem registrou o documento pode assiná-lo.");
+  }
+  if (modulo === "prescricoes" && documento.origemMemed) {
+    throw new HttpsError("failed-precondition", "Esta prescrição já foi emitida e assinada digitalmente pela Memed — não precisa (nem deve) ser assinada de novo aqui.");
+  }
+
+  const clinicaSnap = await db.doc(`clinicas/${clinicaId}`).get();
+  const certInfo = clinicaSnap.data()?.certificadoNfse;
+  if (!certInfo || certInfo.status !== "configurado") {
+    throw new HttpsError("failed-precondition", "Nenhum certificado digital configurado. Configure em Configurações → Certificado Digital.");
+  }
+
+  let secretJson;
+  try {
+    secretJson = JSON.parse(await lerSecretMaisRecente(nomeSecretCertificado(clinicaId)));
+  } catch (err) {
+    logger.error("Erro ao ler certificado do Secret Manager:", err);
+    throw new HttpsError("internal", "Não foi possível recuperar o certificado configurado.");
+  }
+  const { pfxBase64, senha } = secretJson;
+
+  let privateKeyPem;
+  try {
+    const asn1 = forge.asn1.fromDer(forge.util.decode64(pfxBase64));
+    const p12 = forge.pkcs12.pkcs12FromAsn1(asn1, false, senha);
+    const bagsKey = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
+    const keyBag = bagsKey[forge.pki.oids.pkcs8ShroudedKeyBag]?.[0];
+    privateKeyPem = forge.pki.privateKeyToPem(keyBag.key);
+  } catch (err) {
+    logger.error("Erro ao extrair chave privada do certificado:", err);
+    throw new HttpsError("internal", "Certificado configurado está corrompido ou a senha mudou — reimporte em Configurações.");
+  }
+
+  const criadoEmIso = documento.criadoEm?.toDate ? documento.criadoEm.toDate().toISOString() : new Date().toISOString();
+  // Conteúdo canônico assinado: inclui os identificadores do documento (pra
+  // amarrar a assinatura a ESTE registro específico) e o conteúdo no
+  // momento do registro — se o conteúdo mudar depois, o hash não bate mais
+  // e dá pra detectar adulteração comparando com o estado atual do documento.
+  const conteudoCanonico = JSON.stringify({
+    clinicaId, pacienteId, modulo, documentoId,
+    conteudo: conteudoDoDocumento(modulo, documento),
+    profissionalId: documento.profissionalId || null,
+    criadoEm: criadoEmIso,
+  });
+  const hashSha256 = crypto.createHash("sha256").update(conteudoCanonico, "utf8").digest("hex");
+
+  const sign = crypto.createSign("RSA-SHA256");
+  sign.update(conteudoCanonico, "utf8");
+  const assinaturaBase64 = sign.sign(privateKeyPem, "base64");
+
+  const assinadoEm = new Date().toISOString();
+  await docRef.update({
+    assinatura: {
+      status: "assinado",
+      hashSha256,
+      assinaturaBase64,
+      algoritmo: "RSA-SHA256",
+      certificadoCn: certInfo.nomeCertificado || null,
+      assinadoPorUid: uid,
+      assinadoEm,
+    },
+  });
+
+  return { ok: true, assinadoEm, certificadoCn: certInfo.nomeCertificado || null };
+});
+
+// ---------------------------------------------------------------------
+// Onboarding — criação de clínica nova (multi-tenant self-service) +
+// custom claims automáticos
+// ---------------------------------------------------------------------
+//
+// Sem isto, o único jeito de uma clínica nova existir era rodar o script
+// `scripts/seed.js` manualmente. E mesmo criando o vínculo em `membros/{uid}`
+// direto pelo client (o que as Firestore Rules já permitiam), o usuário
+// nunca "descobria" a clínica no seletor — o `TenantContext` lê a lista de
+// clínicas a partir do custom claim `clinicas` no token do usuário
+// (AuthContext), e nada setava esse claim fora do seed local.
+//
+// NADA aqui usa `collectionGroup` de propósito — ver a nota de arquitetura
+// em src/lib/firestore.js: collectionGroup + Security Rules já deu
+// "Missing or insufficient permissions" neste projeto antes, mesmo com
+// regras corretas. Em vez de varrer `membros` entre clínicas, mantemos um
+// índice invertido simples em `usuarios/{uid}.clinicaIds` (um array),
+// atualizado pelo trigger abaixo sempre que um vínculo muda.
+//
+//  1. `criarClinica` faz a criação atômica (doc da clínica + vínculo admin)
+//     via Admin SDK, sem depender das Firestore Rules do client.
+//  2. `onMembroEscrito` roda toda vez que um vínculo em `membros/{uid}` é
+//     criado/alterado/removido (seja pelo `criarClinica` acima, seja por um
+//     admin convidando alguém pela tela de equipe) e mantém tanto o índice
+//     `usuarios/{uid}.clinicaIds` quanto o custom claim `clinicas`
+//     sincronizados com a realidade do Firestore.
+
+const { onDocumentWritten } = require("firebase-functions/v2/firestore");
+const { getAuth } = require("firebase-admin/auth");
+
+async function adicionarClinicaAoUsuario(uid, clinicaId) {
+  await db.doc(`usuarios/${uid}`).set({ clinicaIds: FieldValue.arrayUnion(clinicaId) }, { merge: true });
+}
+async function removerClinicaDoUsuario(uid, clinicaId) {
+  await db.doc(`usuarios/${uid}`).set({ clinicaIds: FieldValue.arrayRemove(clinicaId) }, { merge: true });
+}
+
+/** Relê `usuarios/{uid}.clinicaIds` e regrava isso como custom claim no
+ * token do usuário — chamar sempre depois de tocar em `clinicaIds`. */
+async function sincronizarClaimsDoUsuario(uid) {
+  const snap = await db.doc(`usuarios/${uid}`).get();
+  const clinicaIds = snap.exists ? (snap.data().clinicaIds || []) : [];
+  await getAuth().setCustomUserClaims(uid, { clinicas: clinicaIds });
+  return clinicaIds;
+}
+
+/**
+ * Cria uma clínica nova e o vínculo do usuário logado como admin dela, numa
+ * transação — evita o cenário de a clínica ser criada mas o vínculo falhar
+ * (ou vice-versa), o que deixaria a clínica "orfã" sem ninguém pra
+ * administrar.
+ *
+ * Entrada:  { nomeClinica }
+ * Saída:    { ok: true, clinicaId }
+ */
+exports.criarClinica = onCall({ region: REGION, timeoutSeconds: 30 }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { nomeClinica } = request.data || {};
+  if (!nomeClinica || !nomeClinica.trim()) {
+    throw new HttpsError("invalid-argument", "Informe o nome da clínica.");
+  }
+
+  const uid = request.auth.uid;
+  const email = request.auth.token.email || null;
+  const clinicaRef = db.collection("clinicas").doc();
+
+  await db.runTransaction(async (tx) => {
+    tx.set(clinicaRef, {
+      nome: nomeClinica.trim(),
+      criadoPor: uid,
+      criadoEm: new Date().toISOString(),
+      plano: "trial",
+    });
+    tx.set(clinicaRef.collection("membros").doc(uid), {
+      nome: request.auth.token.name || email || "Administrador",
+      email,
+      papel: "admin",
+      ativo: true,
+      clinicaNome: nomeClinica.trim(),
+      criadoEm: new Date().toISOString(),
+    });
+  });
+
+  // O trigger onMembroEscrito (abaixo) também reage a essa escrita e faria
+  // a mesma coisa — mas não dá pra garantir que ele já rodou antes desta
+  // função responder ao client, então fazemos aqui também, direto, pra
+  // quem chamou já sair com o claim atualizado sem esperar o trigger
+  // propagar (evita a tela ficar "sem clínica nenhuma" por alguns segundos).
+  await adicionarClinicaAoUsuario(uid, clinicaRef.id);
+  await sincronizarClaimsDoUsuario(uid);
+
+  return { ok: true, clinicaId: clinicaRef.id };
+});
+
+/** Mantém `usuarios/{uid}.clinicaIds` e o custom claim `clinicas`
+ * sincronizados sempre que um vínculo `membros/{uid}` é criado, ativado,
+ * desativado ou removido — em qualquer clínica, não só na criada pelo
+ * `criarClinica` acima (cobre também convites feitos por um admin). */
+exports.onMembroEscrito = onDocumentWritten(
+  { region: REGION, document: "clinicas/{clinicaId}/membros/{uid}" },
+  async (event) => {
+    const { clinicaId, uid } = event.params;
+    const depois = event.data?.after;
+    const ativo = Boolean(depois?.exists && depois.data().ativo === true);
+
+    if (ativo) {
+      await adicionarClinicaAoUsuario(uid, clinicaId);
+    } else {
+      await removerClinicaDoUsuario(uid, clinicaId);
+    }
+    await sincronizarClaimsDoUsuario(uid);
+  }
+);
+
+// ---------------------------------------------------------------------
+// Índice plano de "Assinaturas Pendentes"
+// ---------------------------------------------------------------------
+//
+// condutas/prescricoes/encaminhamentos vivem aninhados sob cada paciente
+// (`clinicas/{id}/pacientes/{pacienteId}/{modulo}/{docId}`) — bom pro
+// prontuário, ruim pra listar "tudo que um médico tem pendente de assinar
+// em toda a clínica" sem um collectionGroup (que este projeto evita, ver
+// nota acima). Este trigger espelha cada documento assinável num índice
+// plano `clinicas/{id}/assinaturasPendentes/{docId}`, criado/atualizado ao
+// registrar o documento e removido automaticamente quando ele é assinado
+// (ver assinarDocumento, mais acima) — a tela de Assinaturas Pendentes só
+// precisa fazer uma query simples nessa coleção.
+exports.onModuloProntuarioEscrito = onDocumentWritten(
+  { region: REGION, document: "clinicas/{clinicaId}/pacientes/{pacienteId}/{modulo}/{docId}" },
+  async (event) => {
+    const { clinicaId, pacienteId, modulo, docId } = event.params;
+    if (!MODULOS_ASSINAVEIS.includes(modulo)) return; // só nos interessam os 3 módulos assináveis
+
+    const indiceRef = db.doc(`clinicas/${clinicaId}/assinaturasPendentes/${docId}`);
+    const depois = event.data?.after;
+
+    if (!depois?.exists) {
+      await indiceRef.delete().catch(() => {});
+      return;
+    }
+
+    const documento = depois.data();
+    const jaResolvido = documento.assinatura?.status === "assinado" || (modulo === "prescricoes" && documento.origemMemed);
+    if (jaResolvido) {
+      await indiceRef.delete().catch(() => {});
+      return;
+    }
+
+    const pacienteSnap = await db.doc(`clinicas/${clinicaId}/pacientes/${pacienteId}`).get();
+    await indiceRef.set({
+      clinicaId, pacienteId, modulo, documentoId: docId,
+      pacienteNome: pacienteSnap.exists ? pacienteSnap.data().nome || null : null,
+      profissionalId: documento.profissionalId || null,
+      resumo: conteudoDoDocumento(modulo, documento).slice(0, 140),
+      criadoEm: documento.criadoEm || FieldValue.serverTimestamp(),
+    });
+  }
+);

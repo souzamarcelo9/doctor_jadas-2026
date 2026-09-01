@@ -1,0 +1,1090 @@
+diff --git a/firestore.indexes.json b/firestore.indexes.json
+index 11cedb7..afaf4b7 100644
+--- a/firestore.indexes.json
++++ b/firestore.indexes.json
+@@ -63,6 +63,14 @@
+         { "fieldPath": "status", "order": "ASCENDING" },
+         { "fieldPath": "criadoEm", "order": "ASCENDING" }
+       ]
++    },
++    {
++      "collectionGroup": "assinaturasPendentes",
++      "queryScope": "COLLECTION",
++      "fields": [
++        { "fieldPath": "profissionalId", "order": "ASCENDING" },
++        { "fieldPath": "criadoEm", "order": "DESCENDING" }
++      ]
+     }
+   ],
+   "fieldOverrides": []
+diff --git a/firestore.rules b/firestore.rules
+index fee05f9..858ad2e 100644
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -120,6 +120,15 @@ service cloud.firestore {
+         allow delete: if souMembro(clinicaId);
+       }
+ 
++      // ---- índice de "Assinaturas Pendentes" (espelhado por Cloud
++      // Function a partir de condutas/prescricoes/encaminhamentos — ver
++      // onModuloProntuarioEscrito em functions/index.js). Só leitura no
++      // client; quem escreve é sempre o Admin SDK, que ignora estas regras. ----
++      match /assinaturasPendentes/{id} {
++        allow read: if souMembro(clinicaId);
++        allow write: if false;
++      }
++
+       // ---- lista de espera ----
+       match /listaEspera/{id} {
+         allow read, create, update, delete: if souMembro(clinicaId);
+diff --git a/functions/index.js b/functions/index.js
+index 954ce05..c9afd7d 100644
+--- a/functions/index.js
++++ b/functions/index.js
+@@ -2,7 +2,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
+ const { defineSecret } = require("firebase-functions/params");
+ const logger = require("firebase-functions/logger");
+ const { initializeApp } = require("firebase-admin/app");
+-const { getFirestore } = require("firebase-admin/firestore");
++const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+ const https = require("node:https");
+ const crypto = require("node:crypto");
+ const forge = require("node-forge");
+@@ -636,3 +636,280 @@ function enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha) {
+     req.end();
+   });
+ }
++
++// ---------------------------------------------------------------------
++// Assinaturas Pendentes — assinatura digital de documentos clínicos
++// ---------------------------------------------------------------------
++//
++// ⚠️ LIMITAÇÃO CONHECIDA: isto gera uma assinatura RSA-SHA256 real sobre o
++// conteúdo do documento, usando a chave privada do certificado .pfx/.p12 já
++// configurado em Configurações → Certificado Digital (o mesmo certificado
++// usado pra NFS-e). Isso prova integridade + posse da chave privada da
++// CLÍNICA, mas NÃO produz um envelope CAdES/PAdES no padrão ICP-Brasil, e o
++// certificado é da clínica, não um e-CPF individual do médico. Não deve ser
++// tratado como equivalente legal a uma assinatura ICP-Brasil em documentos
++// que exigem validade jurídica plena (atestados, receitas de controle
++// especial). Para isso, evoluir para PAdES/CAdES com certificado por médico.
++
++const MODULOS_ASSINAVEIS = ["condutas", "prescricoes", "encaminhamentos"];
++
++// Cada módulo do prontuário guarda o conteúdo em campos diferentes — não
++// existe um `texto` único (ver Conduta.jsx, Prescricoes.jsx,
++// Encaminhamento.jsx). Esta função monta a representação textual que
++// efetivamente vai pro hash/assinatura de cada tipo de documento.
++function conteudoDoDocumento(modulo, documento) {
++  if (modulo === "condutas") return documento.texto || "";
++  if (modulo === "prescricoes") return `${documento.medicamento || ""} — ${documento.posologia || ""}`;
++  if (modulo === "encaminhamentos") return `${documento.especialidade || ""}: ${documento.motivo || ""}`;
++  return "";
++}
++
++/**
++ * Entrada:  { clinicaId, pacienteId, modulo: "condutas"|"prescricoes"|"encaminhamentos", documentoId }
++ * Saída:    { ok: true, assinadoEm, certificadoCn }
++ */
++exports.assinarDocumento = onCall({ region: REGION, timeoutSeconds: 30 }, async (request) => {
++  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
++  const { clinicaId, pacienteId, modulo, documentoId } = request.data || {};
++  if (!clinicaId || !pacienteId || !modulo || !documentoId || !MODULOS_ASSINAVEIS.includes(modulo)) {
++    throw new HttpsError("invalid-argument", "Dados incompletos para assinatura.");
++  }
++
++  const uid = request.auth.uid;
++  const membroSnap = await db.doc(`clinicas/${clinicaId}/membros/${uid}`).get();
++  if (!membroSnap.exists || membroSnap.data().papel !== "medico") {
++    throw new HttpsError("permission-denied", "Só o médico responsável pode assinar documentos clínicos.");
++  }
++
++  const docRef = db.doc(`clinicas/${clinicaId}/pacientes/${pacienteId}/${modulo}/${documentoId}`);
++  const docSnap = await docRef.get();
++  if (!docSnap.exists) throw new HttpsError("not-found", "Documento não encontrado.");
++  const documento = docSnap.data();
++  if (documento.assinatura?.status === "assinado") {
++    throw new HttpsError("failed-precondition", "Este documento já foi assinado.");
++  }
++  if (documento.profissionalId !== uid) {
++    throw new HttpsError("permission-denied", "Só quem registrou o documento pode assiná-lo.");
++  }
++  if (modulo === "prescricoes" && documento.origemMemed) {
++    throw new HttpsError("failed-precondition", "Esta prescrição já foi emitida e assinada digitalmente pela Memed — não precisa (nem deve) ser assinada de novo aqui.");
++  }
++
++  const clinicaSnap = await db.doc(`clinicas/${clinicaId}`).get();
++  const certInfo = clinicaSnap.data()?.certificadoNfse;
++  if (!certInfo || certInfo.status !== "configurado") {
++    throw new HttpsError("failed-precondition", "Nenhum certificado digital configurado. Configure em Configurações → Certificado Digital.");
++  }
++
++  let secretJson;
++  try {
++    secretJson = JSON.parse(await lerSecretMaisRecente(nomeSecretCertificado(clinicaId)));
++  } catch (err) {
++    logger.error("Erro ao ler certificado do Secret Manager:", err);
++    throw new HttpsError("internal", "Não foi possível recuperar o certificado configurado.");
++  }
++  const { pfxBase64, senha } = secretJson;
++
++  let privateKeyPem;
++  try {
++    const asn1 = forge.asn1.fromDer(forge.util.decode64(pfxBase64));
++    const p12 = forge.pkcs12.pkcs12FromAsn1(asn1, false, senha);
++    const bagsKey = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
++    const keyBag = bagsKey[forge.pki.oids.pkcs8ShroudedKeyBag]?.[0];
++    privateKeyPem = forge.pki.privateKeyToPem(keyBag.key);
++  } catch (err) {
++    logger.error("Erro ao extrair chave privada do certificado:", err);
++    throw new HttpsError("internal", "Certificado configurado está corrompido ou a senha mudou — reimporte em Configurações.");
++  }
++
++  const criadoEmIso = documento.criadoEm?.toDate ? documento.criadoEm.toDate().toISOString() : new Date().toISOString();
++  // Conteúdo canônico assinado: inclui os identificadores do documento (pra
++  // amarrar a assinatura a ESTE registro específico) e o conteúdo no
++  // momento do registro — se o conteúdo mudar depois, o hash não bate mais
++  // e dá pra detectar adulteração comparando com o estado atual do documento.
++  const conteudoCanonico = JSON.stringify({
++    clinicaId, pacienteId, modulo, documentoId,
++    conteudo: conteudoDoDocumento(modulo, documento),
++    profissionalId: documento.profissionalId || null,
++    criadoEm: criadoEmIso,
++  });
++  const hashSha256 = crypto.createHash("sha256").update(conteudoCanonico, "utf8").digest("hex");
++
++  const sign = crypto.createSign("RSA-SHA256");
++  sign.update(conteudoCanonico, "utf8");
++  const assinaturaBase64 = sign.sign(privateKeyPem, "base64");
++
++  const assinadoEm = new Date().toISOString();
++  await docRef.update({
++    assinatura: {
++      status: "assinado",
++      hashSha256,
++      assinaturaBase64,
++      algoritmo: "RSA-SHA256",
++      certificadoCn: certInfo.nomeCertificado || null,
++      assinadoPorUid: uid,
++      assinadoEm,
++    },
++  });
++
++  return { ok: true, assinadoEm, certificadoCn: certInfo.nomeCertificado || null };
++});
++
++// ---------------------------------------------------------------------
++// Onboarding — criação de clínica nova (multi-tenant self-service) +
++// custom claims automáticos
++// ---------------------------------------------------------------------
++//
++// Sem isto, o único jeito de uma clínica nova existir era rodar o script
++// `scripts/seed.js` manualmente. E mesmo criando o vínculo em `membros/{uid}`
++// direto pelo client (o que as Firestore Rules já permitiam), o usuário
++// nunca "descobria" a clínica no seletor — o `TenantContext` lê a lista de
++// clínicas a partir do custom claim `clinicas` no token do usuário
++// (AuthContext), e nada setava esse claim fora do seed local.
++//
++// NADA aqui usa `collectionGroup` de propósito — ver a nota de arquitetura
++// em src/lib/firestore.js: collectionGroup + Security Rules já deu
++// "Missing or insufficient permissions" neste projeto antes, mesmo com
++// regras corretas. Em vez de varrer `membros` entre clínicas, mantemos um
++// índice invertido simples em `usuarios/{uid}.clinicaIds` (um array),
++// atualizado pelo trigger abaixo sempre que um vínculo muda.
++//
++//  1. `criarClinica` faz a criação atômica (doc da clínica + vínculo admin)
++//     via Admin SDK, sem depender das Firestore Rules do client.
++//  2. `onMembroEscrito` roda toda vez que um vínculo em `membros/{uid}` é
++//     criado/alterado/removido (seja pelo `criarClinica` acima, seja por um
++//     admin convidando alguém pela tela de equipe) e mantém tanto o índice
++//     `usuarios/{uid}.clinicaIds` quanto o custom claim `clinicas`
++//     sincronizados com a realidade do Firestore.
++
++const { onDocumentWritten } = require("firebase-functions/v2/firestore");
++const { getAuth } = require("firebase-admin/auth");
++
++async function adicionarClinicaAoUsuario(uid, clinicaId) {
++  await db.doc(`usuarios/${uid}`).set({ clinicaIds: FieldValue.arrayUnion(clinicaId) }, { merge: true });
++}
++async function removerClinicaDoUsuario(uid, clinicaId) {
++  await db.doc(`usuarios/${uid}`).set({ clinicaIds: FieldValue.arrayRemove(clinicaId) }, { merge: true });
++}
++
++/** Relê `usuarios/{uid}.clinicaIds` e regrava isso como custom claim no
++ * token do usuário — chamar sempre depois de tocar em `clinicaIds`. */
++async function sincronizarClaimsDoUsuario(uid) {
++  const snap = await db.doc(`usuarios/${uid}`).get();
++  const clinicaIds = snap.exists ? (snap.data().clinicaIds || []) : [];
++  await getAuth().setCustomUserClaims(uid, { clinicas: clinicaIds });
++  return clinicaIds;
++}
++
++/**
++ * Cria uma clínica nova e o vínculo do usuário logado como admin dela, numa
++ * transação — evita o cenário de a clínica ser criada mas o vínculo falhar
++ * (ou vice-versa), o que deixaria a clínica "orfã" sem ninguém pra
++ * administrar.
++ *
++ * Entrada:  { nomeClinica }
++ * Saída:    { ok: true, clinicaId }
++ */
++exports.criarClinica = onCall({ region: REGION, timeoutSeconds: 30 }, async (request) => {
++  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
++  const { nomeClinica } = request.data || {};
++  if (!nomeClinica || !nomeClinica.trim()) {
++    throw new HttpsError("invalid-argument", "Informe o nome da clínica.");
++  }
++
++  const uid = request.auth.uid;
++  const email = request.auth.token.email || null;
++  const clinicaRef = db.collection("clinicas").doc();
++
++  await db.runTransaction(async (tx) => {
++    tx.set(clinicaRef, {
++      nome: nomeClinica.trim(),
++      criadoPor: uid,
++      criadoEm: new Date().toISOString(),
++      plano: "trial",
++    });
++    tx.set(clinicaRef.collection("membros").doc(uid), {
++      nome: request.auth.token.name || email || "Administrador",
++      email,
++      papel: "admin",
++      ativo: true,
++      clinicaNome: nomeClinica.trim(),
++      criadoEm: new Date().toISOString(),
++    });
++  });
++
++  // O trigger onMembroEscrito (abaixo) também reage a essa escrita e faria
++  // a mesma coisa — mas não dá pra garantir que ele já rodou antes desta
++  // função responder ao client, então fazemos aqui também, direto, pra
++  // quem chamou já sair com o claim atualizado sem esperar o trigger
++  // propagar (evita a tela ficar "sem clínica nenhuma" por alguns segundos).
++  await adicionarClinicaAoUsuario(uid, clinicaRef.id);
++  await sincronizarClaimsDoUsuario(uid);
++
++  return { ok: true, clinicaId: clinicaRef.id };
++});
++
++/** Mantém `usuarios/{uid}.clinicaIds` e o custom claim `clinicas`
++ * sincronizados sempre que um vínculo `membros/{uid}` é criado, ativado,
++ * desativado ou removido — em qualquer clínica, não só na criada pelo
++ * `criarClinica` acima (cobre também convites feitos por um admin). */
++exports.onMembroEscrito = onDocumentWritten(
++  { region: REGION, document: "clinicas/{clinicaId}/membros/{uid}" },
++  async (event) => {
++    const { clinicaId, uid } = event.params;
++    const depois = event.data?.after;
++    const ativo = Boolean(depois?.exists && depois.data().ativo === true);
++
++    if (ativo) {
++      await adicionarClinicaAoUsuario(uid, clinicaId);
++    } else {
++      await removerClinicaDoUsuario(uid, clinicaId);
++    }
++    await sincronizarClaimsDoUsuario(uid);
++  }
++);
++
++// ---------------------------------------------------------------------
++// Índice plano de "Assinaturas Pendentes"
++// ---------------------------------------------------------------------
++//
++// condutas/prescricoes/encaminhamentos vivem aninhados sob cada paciente
++// (`clinicas/{id}/pacientes/{pacienteId}/{modulo}/{docId}`) — bom pro
++// prontuário, ruim pra listar "tudo que um médico tem pendente de assinar
++// em toda a clínica" sem um collectionGroup (que este projeto evita, ver
++// nota acima). Este trigger espelha cada documento assinável num índice
++// plano `clinicas/{id}/assinaturasPendentes/{docId}`, criado/atualizado ao
++// registrar o documento e removido automaticamente quando ele é assinado
++// (ver assinarDocumento, mais acima) — a tela de Assinaturas Pendentes só
++// precisa fazer uma query simples nessa coleção.
++exports.onModuloProntuarioEscrito = onDocumentWritten(
++  { region: REGION, document: "clinicas/{clinicaId}/pacientes/{pacienteId}/{modulo}/{docId}" },
++  async (event) => {
++    const { clinicaId, pacienteId, modulo, docId } = event.params;
++    if (!MODULOS_ASSINAVEIS.includes(modulo)) return; // só nos interessam os 3 módulos assináveis
++
++    const indiceRef = db.doc(`clinicas/${clinicaId}/assinaturasPendentes/${docId}`);
++    const depois = event.data?.after;
++
++    if (!depois?.exists) {
++      await indiceRef.delete().catch(() => {});
++      return;
++    }
++
++    const documento = depois.data();
++    const jaResolvido = documento.assinatura?.status === "assinado" || (modulo === "prescricoes" && documento.origemMemed);
++    if (jaResolvido) {
++      await indiceRef.delete().catch(() => {});
++      return;
++    }
++
++    const pacienteSnap = await db.doc(`clinicas/${clinicaId}/pacientes/${pacienteId}`).get();
++    await indiceRef.set({
++      clinicaId, pacienteId, modulo, documentoId: docId,
++      pacienteNome: pacienteSnap.exists ? pacienteSnap.data().nome || null : null,
++      profissionalId: documento.profissionalId || null,
++      resumo: conteudoDoDocumento(modulo, documento).slice(0, 140),
++      criadoEm: documento.criadoEm || FieldValue.serverTimestamp(),
++    });
++  }
++);
+diff --git a/src/App.jsx b/src/App.jsx
+index f8ea763..61ed5df 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -4,6 +4,8 @@ import { TenantProvider } from "./context/TenantContext";
+ import ProtectedRoute from "./components/ProtectedRoute";
+ import Sidebar from "./components/Sidebar";
+ import Login from "./pages/Login";
++import Cadastro from "./pages/Cadastro";
++import Onboarding from "./pages/Onboarding";
+ import Dashboard from "./pages/Dashboard";
+ import Agenda from "./pages/Agenda";
+ import Pacientes from "./pages/Pacientes";
+@@ -14,6 +16,7 @@ import Config from "./pages/Config";
+ import Financeiro from "./pages/Financeiro";
+ import Relatorios from "./pages/Relatorios";
+ import Placeholder from "./pages/Placeholder";
++import AssinaturasPendentes from "./pages/AssinaturasPendentes";
+ 
+ function AppLayout() {
+   return (
+@@ -34,6 +37,8 @@ export default function App() {
+       <AuthProvider>
+         <Routes>
+           <Route path="/login" element={<Login />} />
++          <Route path="/cadastro" element={<Cadastro />} />
++          <Route path="/onboarding" element={<ProtectedRoute><Onboarding /></ProtectedRoute>} />
+           <Route element={<AppLayout />}>
+             <Route path="/" element={<Dashboard />} />
+             <Route path="/agenda" element={<Agenda />} />
+@@ -45,7 +50,7 @@ export default function App() {
+             <Route path="/relatorios" element={<Relatorios />} />
+             <Route path="/financeiro" element={<Financeiro />} />
+             <Route path="/tarefas" element={<Placeholder title="Tarefas" />} />
+-            <Route path="/assinaturas" element={<Placeholder title="Assinaturas Pendentes" />} />
++            <Route path="/assinaturas" element={<AssinaturasPendentes />} />
+             <Route path="*" element={<Placeholder title="Página não encontrada" />} />
+           </Route>
+         </Routes>
+diff --git a/src/components/EditarUsuarioModal.jsx b/src/components/EditarUsuarioModal.jsx
+new file mode 100644
+index 0000000..8f68d55
+--- /dev/null
++++ b/src/components/EditarUsuarioModal.jsx
+@@ -0,0 +1,106 @@
++import { useEffect, useState } from "react";
++import { X, UserCog, Camera, Loader2, CheckCircle2 } from "lucide-react";
++import { useTenant } from "../context/TenantContext";
++import { useFirestoreDoc, atualizarDocumento } from "../lib/firestore";
++import { enviarFotoProfissional } from "../lib/storage";
++
++export default function EditarUsuarioModal({ open, onClose }) {
++  const { clinicaId, profissionalId } = useTenant();
++  const { data: membro, loading } = useFirestoreDoc(open && clinicaId ? `clinicas/${clinicaId}/membros` : null, profissionalId);
++
++  const [form, setForm] = useState({ nome: "", especialidade: "", celular: "" });
++  const [fotoFile, setFotoFile] = useState(null);
++  const [fotoPreview, setFotoPreview] = useState("");
++  const [salvando, setSalvando] = useState(false);
++  const [sucesso, setSucesso] = useState(false);
++  const [erro, setErro] = useState("");
++
++  useEffect(() => {
++    if (membro) {
++      setForm({ nome: membro.nome || "", especialidade: membro.especialidade || "", celular: membro.celular || "" });
++      setFotoPreview(membro.fotoUrl || "");
++    }
++  }, [membro]);
++
++  if (!open) return null;
++
++  function handleFoto(e) {
++    const file = e.target.files?.[0];
++    if (!file) return;
++    setFotoFile(file);
++    setFotoPreview(URL.createObjectURL(file));
++  }
++
++  async function salvar() {
++    setErro(""); setSucesso(false);
++    setSalvando(true);
++    try {
++      const dados = { ...form };
++      if (fotoFile) {
++        dados.fotoUrl = await enviarFotoProfissional(clinicaId, profissionalId, fotoFile);
++      }
++      await atualizarDocumento(`clinicas/${clinicaId}/membros`, profissionalId, dados);
++      setFotoFile(null);
++      setSucesso(true);
++    } catch (err) {
++      console.error("Erro ao salvar usuário:", err);
++      setErro(err.message || "Não foi possível salvar. Tente novamente.");
++    } finally {
++      setSalvando(false);
++    }
++  }
++
++  const iniciais = (form.nome || "?").split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
++
++  return (
++    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
++      <div className="absolute inset-0 bg-ink-900/40" onClick={onClose} />
++      <div className="relative bg-white w-full max-w-md rounded-xl2 shadow-pop overflow-hidden animate-slideIn">
++        <div className="flex items-center justify-between px-5 py-4 bg-brand-600 text-white">
++          <span className="font-display font-semibold flex items-center gap-2"><UserCog size={18} /> Editar usuário</span>
++          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/15 focus-ring"><X size={18} /></button>
++        </div>
++
++        {loading ? (
++          <div className="flex items-center gap-2 text-sm text-ink-500 justify-center py-10"><Loader2 size={16} className="animate-spin" /> Carregando…</div>
++        ) : (
++          <div className="p-5 space-y-4">
++            <div className="flex items-center gap-4">
++              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-brand-300 to-brand-600 flex items-center justify-center text-white font-display font-semibold text-lg overflow-hidden shrink-0">
++                {fotoPreview ? <img src={fotoPreview} alt="" className="w-full h-full object-cover" /> : iniciais}
++              </div>
++              <label className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 cursor-pointer">
++                <Camera size={13} /> {fotoPreview ? "Trocar foto" : "Selecionar foto"}
++                <input type="file" accept="image/*" onChange={handleFoto} className="hidden" />
++              </label>
++            </div>
++
++            <label className="block text-xs">
++              <span className="text-ink-500 font-medium">Nome</span>
++              <input value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
++            </label>
++            <label className="block text-xs">
++              <span className="text-ink-500 font-medium">Especialidade</span>
++              <input value={form.especialidade} onChange={(e) => setForm({ ...form, especialidade: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
++            </label>
++            <label className="block text-xs">
++              <span className="text-ink-500 font-medium">Celular</span>
++              <input value={form.celular} onChange={(e) => setForm({ ...form, celular: e.target.value })} placeholder="(00) 00000-0000" className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
++            </label>
++
++            {erro && <div className="text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-3">{erro}</div>}
++            {sucesso && (
++              <div className="flex items-center gap-2 text-xs bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-lg p-3">
++                <CheckCircle2 size={14} /> Dados salvos com sucesso.
++              </div>
++            )}
++
++            <button onClick={salvar} disabled={salvando} className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring">
++              {salvando && <Loader2 size={15} className="animate-spin" />} Salvar
++            </button>
++          </div>
++        )}
++      </div>
++    </div>
++  );
++}
+diff --git a/src/components/ProtectedRoute.jsx b/src/components/ProtectedRoute.jsx
+index db09fb1..1f91649 100644
+--- a/src/components/ProtectedRoute.jsx
++++ b/src/components/ProtectedRoute.jsx
+@@ -1,9 +1,10 @@
+-import { Navigate } from "react-router-dom";
++import { Navigate, useLocation } from "react-router-dom";
+ import { useAuth } from "../context/AuthContext";
+ import { Loader2 } from "lucide-react";
+ 
+ export default function ProtectedRoute({ children }) {
+-  const { user, loading, firebaseConfigured } = useAuth();
++  const { user, loading, firebaseConfigured, clinicaIds } = useAuth();
++  const location = useLocation();
+ 
+   if (loading) {
+     return (
+@@ -22,5 +23,13 @@ export default function ProtectedRoute({ children }) {
+ 
+   if (!user) return <Navigate to="/login" replace />;
+ 
++  // Autenticado, mas sem nenhuma clínica vinculada ainda (conta nova, ou
++  // custom claim que ainda não propagou) — manda pro onboarding criar a
++  // primeira clínica, em vez de deixar o app tentar renderizar sem
++  // clinicaId nenhum.
++  if (clinicaIds.length === 0 && location.pathname !== "/onboarding") {
++    return <Navigate to="/onboarding" replace />;
++  }
++
+   return children;
+ }
+diff --git a/src/components/Topbar.jsx b/src/components/Topbar.jsx
+index d0b0e17..0daedf5 100644
+--- a/src/components/Topbar.jsx
++++ b/src/components/Topbar.jsx
+@@ -2,16 +2,21 @@ import { useState } from "react";
+ import { Bell, HelpCircle, ThumbsUp, Maximize2, LogOut, ChevronDown } from "lucide-react";
+ import { useNavigate } from "react-router-dom";
+ import { useAuth } from "../context/AuthContext";
++import { useTenant } from "../context/TenantContext";
++import { useFirestoreDoc } from "../lib/firestore";
+ import ClinicSwitcher from "./ClinicSwitcher";
+ import { currentUser as demoUser } from "../data/mockData";
+ 
+ export default function Topbar({ title, timer }) {
+   const { user, profile, logout, firebaseConfigured } = useAuth();
++  const { clinicaId, profissionalId } = useTenant();
++  const { data: membro } = useFirestoreDoc(clinicaId ? `clinicas/${clinicaId}/membros` : null, profissionalId);
+   const navigate = useNavigate();
+   const [menuOpen, setMenuOpen] = useState(false);
+ 
+-  const displayName = profile?.nome || user?.displayName || user?.email || demoUser.name;
++  const displayName = membro?.nome || profile?.nome || user?.displayName || user?.email || demoUser.name;
+   const displayStatus = firebaseConfigured ? (profile?.status || "Disponível") : `${demoUser.status} (modo demo)`;
++  const fotoUrl = membro?.fotoUrl || "";
+   const initials = displayName
+     .split(" ")
+     .map((w) => w[0])
+@@ -55,8 +60,8 @@ export default function Topbar({ title, timer }) {
+             onClick={() => setMenuOpen((o) => !o)}
+             className="flex items-center gap-2 pl-2 lg:pl-3 border-l border-black/10 focus-ring rounded-lg"
+           >
+-            <div className="w-8 h-8 rounded-full bg-brand-500 text-white flex items-center justify-center text-xs font-semibold shrink-0">
+-              {initials}
++            <div className="w-8 h-8 rounded-full bg-brand-500 text-white flex items-center justify-center text-xs font-semibold shrink-0 overflow-hidden">
++              {fotoUrl ? <img src={fotoUrl} alt="" className="w-full h-full object-cover" /> : initials}
+             </div>
+             <div className="hidden sm:block leading-tight text-left">
+               <div className="text-xs font-semibold text-ink-900 max-w-[140px] truncate">{displayName}</div>
+diff --git a/src/context/AuthContext.jsx b/src/context/AuthContext.jsx
+index 73c9e1b..9222e82 100644
+--- a/src/context/AuthContext.jsx
++++ b/src/context/AuthContext.jsx
+@@ -1,14 +1,16 @@
+-import { createContext, useContext, useEffect, useState } from "react";
++import { createContext, useContext, useEffect, useState, useCallback } from "react";
+ import {
+   onAuthStateChanged,
+   signInWithEmailAndPassword,
++  createUserWithEmailAndPassword,
++  updateProfile,
+   signOut as firebaseSignOut,
+   sendPasswordResetEmail,
+   setPersistence,
+   browserLocalPersistence,
+   browserSessionPersistence,
+ } from "firebase/auth";
+-import { doc, getDoc } from "firebase/firestore";
++import { doc, getDoc, setDoc } from "firebase/firestore";
+ import { auth, db, firebaseConfigured } from "../firebase";
+ 
+ const AuthContext = createContext(null);
+@@ -39,16 +41,7 @@ export function AuthProvider({ children }) {
+         } catch {
+           setProfile(null);
+         }
+-        try {
+-          // force refresh na primeira leitura pós-login evita ficar preso a um
+-          // token em cache que ainda não tem o claim mais recente (ex: logo
+-          // depois de rodar o seed e ganhar acesso a uma clínica nova).
+-          const token = await firebaseUser.getIdTokenResult(true);
+-          setClinicaIds(token.claims?.clinicas || []);
+-        } catch (err) {
+-          console.error("Erro ao ler custom claims:", err);
+-          setClinicaIds([]);
+-        }
++        await lerClaims(firebaseUser);
+       } else {
+         setProfile(null);
+         setClinicaIds([]);
+@@ -58,6 +51,48 @@ export function AuthProvider({ children }) {
+     return unsub;
+   }, []);
+ 
++  async function lerClaims(firebaseUser) {
++    try {
++      // force refresh evita ficar preso a um token em cache que ainda não
++      // tem o claim mais recente (ex: logo depois de criar/entrar numa
++      // clínica nova pelo onboarding).
++      const token = await firebaseUser.getIdTokenResult(true);
++      setClinicaIds(token.claims?.clinicas || []);
++      return token.claims?.clinicas || [];
++    } catch (err) {
++      console.error("Erro ao ler custom claims:", err);
++      setClinicaIds([]);
++      return [];
++    }
++  }
++
++  /** Rechama a leitura do token depois que uma Cloud Function (ex:
++   * criarClinica) acabou de mudar o custom claim `clinicas` do usuário —
++   * sem isso, o app continuaria usando o claim antigo (sem a clínica nova)
++   * até o token expirar sozinho. */
++  const refrescarClaims = useCallback(async () => {
++    if (!auth.currentUser) return [];
++    return lerClaims(auth.currentUser);
++  }, []);
++
++  async function signup(email, password, nome) {
++    if (!firebaseConfigured) {
++      throw new Error(
++        "Firebase ainda não configurado. Preencha o arquivo .env com as credenciais do seu projeto (veja .env.example)."
++      );
++    }
++    const cred = await createUserWithEmailAndPassword(auth, email, password);
++    if (nome) {
++      await updateProfile(cred.user, { displayName: nome });
++    }
++    await setDoc(doc(db, "usuarios", cred.user.uid), {
++      nome: nome || email,
++      email,
++      criadoEm: new Date().toISOString(),
++    });
++    return cred;
++  }
++
+   async function login(email, password, remember) {
+     if (!firebaseConfigured) {
+       throw new Error(
+@@ -79,7 +114,7 @@ export function AuthProvider({ children }) {
+   }
+ 
+   return (
+-    <AuthContext.Provider value={{ user, profile, clinicaIds, loading, login, logout, resetPassword, firebaseConfigured }}>
++    <AuthContext.Provider value={{ user, profile, clinicaIds, loading, login, signup, logout, resetPassword, refrescarClaims, firebaseConfigured }}>
+       {children}
+     </AuthContext.Provider>
+   );
+diff --git a/src/lib/assinaturas.js b/src/lib/assinaturas.js
+new file mode 100644
+index 0000000..62f94cb
+--- /dev/null
++++ b/src/lib/assinaturas.js
+@@ -0,0 +1,13 @@
++import { httpsCallable } from "firebase/functions";
++import { functionsInstance, firebaseConfigured } from "../firebase";
++
++/** Assina digitalmente um documento clínico (conduta, prescrição ou
++ * encaminhamento) com o certificado digital configurado na clínica. Veja o
++ * aviso de limitação (não é um envelope CAdES/PAdES ICP-Brasil) no
++ * comentário da própria Cloud Function, em functions/index.js. */
++export async function assinarDocumento(clinicaId, pacienteId, modulo, documentoId) {
++  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
++  const chamar = httpsCallable(functionsInstance, "assinarDocumento");
++  const { data } = await chamar({ clinicaId, pacienteId, modulo, documentoId });
++  return data; // { ok, assinadoEm, certificadoCn }
++}
+diff --git a/src/lib/onboarding.js b/src/lib/onboarding.js
+new file mode 100644
+index 0000000..12ce02b
+--- /dev/null
++++ b/src/lib/onboarding.js
+@@ -0,0 +1,14 @@
++import { httpsCallable } from "firebase/functions";
++import { functionsInstance, firebaseConfigured } from "../firebase";
++
++/** Cria uma clínica nova e vincula o usuário logado como admin dela.
++ * Depois de chamar isso, é preciso rechamar `refrescarClaims()` (do
++ * AuthContext) antes de navegar — a Cloud Function já atualiza o custom
++ * claim no servidor, mas o token em cache no navegador só reflete isso
++ * depois de um refresh explícito. */
++export async function criarClinica(nomeClinica) {
++  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
++  const chamar = httpsCallable(functionsInstance, "criarClinica");
++  const { data } = await chamar({ nomeClinica });
++  return data; // { ok, clinicaId }
++}
+diff --git a/src/pages/AssinaturasPendentes.jsx b/src/pages/AssinaturasPendentes.jsx
+new file mode 100644
+index 0000000..a95310b
+--- /dev/null
++++ b/src/pages/AssinaturasPendentes.jsx
+@@ -0,0 +1,102 @@
++import { useState } from "react";
++import Topbar from "../components/Topbar";
++import { FileSignature, ClipboardList, Pill, Send, Loader2, AlertTriangle, ShieldCheck } from "lucide-react";
++import { useTenant } from "../context/TenantContext";
++import { useFirestoreQuery, where, orderBy } from "../lib/firestore";
++import { assinarDocumento } from "../lib/assinaturas";
++
++const moduloInfo = {
++  condutas: { label: "Conduta", icon: ClipboardList, tone: "bg-brand-50 text-brand-700" },
++  prescricoes: { label: "Prescrição", icon: Pill, tone: "bg-emerald-50 text-emerald-700" },
++  encaminhamentos: { label: "Encaminhamento", icon: Send, tone: "bg-indigo-50 text-indigo-700" },
++};
++
++export default function AssinaturasPendentes() {
++  const { clinicaId, profissionalId } = useTenant();
++  const { data: pendentes, loading } = useFirestoreQuery(
++    clinicaId ? `clinicas/${clinicaId}/assinaturasPendentes` : null,
++    [where("profissionalId", "==", profissionalId), orderBy("criadoEm", "desc")],
++    [profissionalId]
++  );
++
++  const [assinandoId, setAssinandoId] = useState(null);
++  const [erroId, setErroId] = useState(null);
++  const [erroMsg, setErroMsg] = useState("");
++
++  async function assinar(item) {
++    setAssinandoId(item.id);
++    setErroId(null);
++    try {
++      await assinarDocumento(clinicaId, item.pacienteId, item.modulo, item.documentoId);
++      // Sem necessidade de remover manualmente da lista: a Cloud Function
++      // apaga o item do índice ao assinar, e o onSnapshot já reflete isso.
++    } catch (err) {
++      console.error("Erro ao assinar documento:", err);
++      setErroId(item.id);
++      setErroMsg(err.message || "Não foi possível assinar. Tente novamente.");
++    } finally {
++      setAssinandoId(null);
++    }
++  }
++
++  return (
++    <div className="flex-1 flex flex-col min-w-0">
++      <Topbar title="Assinaturas Pendentes" />
++      <main className="flex-1 p-4 lg:p-6 space-y-4">
++        <div className="flex items-start gap-2.5 text-xs bg-amber-50 text-amber-700 border border-amber-100 rounded-lg p-3">
++          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
++          A assinatura usa o certificado digital configurado em Configurações → Certificado Digital. Ela prova integridade e autoria com criptografia real, mas ainda não é um envelope CAdES/PAdES no padrão ICP-Brasil — não trate como equivalente legal a uma assinatura ICP-Brasil para documentos que exigem validade jurídica plena.
++        </div>
++
++        {loading && <div className="text-xs text-ink-500 flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Carregando…</div>}
++
++        {!loading && pendentes.length === 0 && (
++          <div className="card p-8 text-center">
++            <ShieldCheck size={28} className="mx-auto text-emerald-500 mb-2" />
++            <p className="text-sm font-semibold text-ink-900">Tudo assinado por aqui.</p>
++            <p className="text-xs text-ink-500 mt-1">Novas condutas, prescrições e encaminhamentos que você registrar aparecem aqui até serem assinados.</p>
++          </div>
++        )}
++
++        <div className="space-y-2">
++          {pendentes.map((item) => {
++            const info = moduloInfo[item.modulo] || moduloInfo.condutas;
++            const Icon = info.icon;
++            return (
++              <div key={item.id} className="card p-3.5">
++                <div className="flex items-start gap-3">
++                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${info.tone}`}>
++                    <Icon size={16} />
++                  </div>
++                  <div className="flex-1 min-w-0">
++                    <div className="flex items-center gap-2 flex-wrap">
++                      <span className="text-sm font-semibold text-ink-900">{item.pacienteNome || "Paciente"}</span>
++                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${info.tone}`}>{info.label}</span>
++                      <span className="text-[11px] text-ink-500">{formatarData(item.criadoEm)}</span>
++                    </div>
++                    <p className="text-xs text-ink-700 mt-1 leading-relaxed">{item.resumo || "—"}</p>
++                    {erroId === item.id && <p className="text-[11px] text-rose-600 mt-1.5">{erroMsg}</p>}
++                  </div>
++                  <button
++                    onClick={() => assinar(item)}
++                    disabled={assinandoId === item.id}
++                    className="flex items-center gap-1.5 text-xs font-semibold bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white px-3.5 py-2 rounded-lg focus-ring shrink-0"
++                  >
++                    {assinandoId === item.id ? <Loader2 size={13} className="animate-spin" /> : <FileSignature size={13} />}
++                    Assinar
++                  </button>
++                </div>
++              </div>
++            );
++          })}
++        </div>
++      </main>
++    </div>
++  );
++}
++
++function formatarData(ts) {
++  if (!ts?.toDate) return "";
++  const d = ts.toDate();
++  return `${d.toLocaleDateString("pt-BR")} ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
++}
+diff --git a/src/pages/Cadastro.jsx b/src/pages/Cadastro.jsx
+new file mode 100644
+index 0000000..8d6a804
+--- /dev/null
++++ b/src/pages/Cadastro.jsx
+@@ -0,0 +1,135 @@
++import { useState } from "react";
++import { Link, useNavigate, Navigate } from "react-router-dom";
++import { useAuth } from "../context/AuthContext";
++import { User, Mail, Lock, Eye, EyeOff, UserPlus, AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
++
++const BG_IMAGE = "https://images.unsplash.com/photo-1532938911079-1b06ac7ceec7?fm=jpg&q=80&w=1800&auto=format&fit=crop";
++
++export default function Cadastro() {
++  const { signup, user, firebaseConfigured } = useAuth();
++  const navigate = useNavigate();
++
++  const [nome, setNome] = useState("");
++  const [email, setEmail] = useState("");
++  const [password, setPassword] = useState("");
++  const [showPw, setShowPw] = useState(false);
++  const [error, setError] = useState("");
++  const [loading, setLoading] = useState(false);
++
++  if (user) return <Navigate to="/onboarding" replace />;
++
++  async function handleSubmit(e) {
++    e.preventDefault();
++    setError("");
++    if (password.length < 6) {
++      setError("A senha precisa ter pelo menos 6 caracteres.");
++      return;
++    }
++    setLoading(true);
++    try {
++      await signup(email, password, nome);
++      navigate("/onboarding", { replace: true });
++    } catch (err) {
++      setError(mapFirebaseError(err));
++    } finally {
++      setLoading(false);
++    }
++  }
++
++  return (
++    <div className="min-h-screen relative flex items-center justify-center p-4 overflow-hidden">
++      <div className="absolute inset-0 bg-cover bg-center scale-105" style={{ backgroundImage: `url(${BG_IMAGE})` }} />
++      <div className="absolute inset-0 bg-gradient-to-br from-brand-950/90 via-brand-900/80 to-brand-700/70" />
++      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(63,196,192,0.25),transparent_45%)]" />
++
++      <div className="relative w-full max-w-4xl grid lg:grid-cols-5 rounded-xl2 overflow-hidden shadow-pop">
++        <div className="hidden lg:flex lg:col-span-2 flex-col justify-between p-8 bg-white/5 backdrop-blur-md border-r border-white/10 text-white">
++          <div>
++            <div className="flex items-center gap-2">
++              <div className="w-9 h-9 rounded-lg bg-brand-400 flex items-center justify-center font-display font-bold text-brand-950 text-sm">DP</div>
++              <span className="font-display font-semibold tracking-wide">Doctor<span className="text-brand-300">PEP</span></span>
++            </div>
++            <h1 className="font-display font-semibold text-2xl leading-snug mt-10">Comece a usar em poucos minutos.</h1>
++            <p className="text-sm text-white/70 mt-3 leading-relaxed">
++              Crie sua conta, depois configure sua clínica — sem precisar de ninguém do suporte pra liberar o acesso.
++            </p>
++          </div>
++          <div className="flex items-center gap-2 text-xs text-white/60"><ShieldCheck size={15} /> Dados protegidos conforme a LGPD</div>
++        </div>
++
++        <div className="lg:col-span-3 bg-white p-8 sm:p-10 flex flex-col justify-center">
++          <div className="lg:hidden flex items-center gap-2 mb-8">
++            <div className="w-9 h-9 rounded-lg bg-brand-500 flex items-center justify-center font-display font-bold text-white text-sm">DP</div>
++            <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">PEP</span></span>
++          </div>
++
++          <h2 className="font-display font-semibold text-xl text-ink-900">Criar conta</h2>
++          <p className="text-sm text-ink-500 mt-1 mb-6">O próximo passo é configurar sua clínica.</p>
++
++          {!firebaseConfigured && (
++            <div className="mb-5 flex items-start gap-2.5 text-xs bg-amber-50 text-amber-700 border border-amber-100 rounded-lg p-3">
++              <AlertTriangle size={15} className="mt-0.5 shrink-0" />
++              <span>
++                Firebase ainda não configurado neste ambiente — preencha o arquivo <code className="font-mono">.env</code> com
++                as credenciais do projeto (veja <code className="font-mono">.env.example</code>).
++              </span>
++            </div>
++          )}
++
++          <form onSubmit={handleSubmit} className="space-y-4">
++            <label className="block">
++              <span className="text-xs font-medium text-ink-500">Seu nome</span>
++              <div className="relative mt-1">
++                <User size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-500" />
++                <input required value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Dra. Ana Souza" className="w-full text-sm border border-black/10 rounded-lg pl-9 pr-3 py-2.5 focus-ring" />
++              </div>
++            </label>
++
++            <label className="block">
++              <span className="text-xs font-medium text-ink-500">E-mail</span>
++              <div className="relative mt-1">
++                <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-500" />
++                <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="voce@suaclinica.com.br" className="w-full text-sm border border-black/10 rounded-lg pl-9 pr-3 py-2.5 focus-ring" />
++              </div>
++            </label>
++
++            <label className="block">
++              <span className="text-xs font-medium text-ink-500">Senha</span>
++              <div className="relative mt-1">
++                <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-500" />
++                <input type={showPw ? "text" : "password"} required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres" className="w-full text-sm border border-black/10 rounded-lg pl-9 pr-9 py-2.5 focus-ring" />
++                <button type="button" onClick={() => setShowPw((s) => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-500 hover:text-ink-900" tabIndex={-1}>
++                  {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
++                </button>
++              </div>
++            </label>
++
++            {error && (
++              <div className="flex items-start gap-2 text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-3">
++                <AlertTriangle size={14} className="mt-0.5 shrink-0" /> {error}
++              </div>
++            )}
++
++            <button type="submit" disabled={loading} className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-70 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring">
++              {loading ? <Loader2 size={16} className="animate-spin" /> : <UserPlus size={16} />}
++              {loading ? "Criando conta…" : "Criar conta"}
++            </button>
++          </form>
++
++          <p className="text-xs text-ink-500 mt-6 text-center">
++            Já tem conta? <Link to="/login" className="text-brand-600 hover:text-brand-700 font-medium">Entrar</Link>
++          </p>
++        </div>
++      </div>
++    </div>
++  );
++}
++
++function mapFirebaseError(err) {
++  const code = err?.code || "";
++  if (code.includes("email-already-in-use")) return "Já existe uma conta com esse e-mail — tente entrar em vez de criar uma nova.";
++  if (code.includes("invalid-email")) return "E-mail inválido.";
++  if (code.includes("weak-password")) return "Senha muito fraca — use pelo menos 6 caracteres.";
++  if (code.includes("network-request-failed")) return "Falha de conexão. Verifique sua internet e tente novamente.";
++  return err?.message || "Não foi possível criar a conta. Tente novamente.";
++}
+diff --git a/src/pages/Config.jsx b/src/pages/Config.jsx
+index 7f7960d..8b33977 100644
+--- a/src/pages/Config.jsx
++++ b/src/pages/Config.jsx
+@@ -2,6 +2,7 @@ import { useState } from "react";
+ import Topbar from "../components/Topbar";
+ import PreferenciasModal from "../components/PreferenciasModal";
+ import CertificadoDigitalModal from "../components/CertificadoDigitalModal";
++import EditarUsuarioModal from "../components/EditarUsuarioModal";
+ import { SlidersHorizontal, FileSignature, ListTodo, UserCog, FileText } from "lucide-react";
+ 
+ const cards = [
+@@ -15,10 +16,12 @@ const cards = [
+ export default function Config() {
+   const [openPref, setOpenPref] = useState(false);
+   const [openCert, setOpenCert] = useState(false);
++  const [openUsuario, setOpenUsuario] = useState(false);
+ 
+   function handleClick(title) {
+     if (title === "Preferências") setOpenPref(true);
+     if (title === "Certificado Digital") setOpenCert(true);
++    if (title === "Editar Usuário") setOpenUsuario(true);
+   }
+ 
+   return (
+@@ -43,6 +46,7 @@ export default function Config() {
+       </main>
+       <PreferenciasModal open={openPref} onClose={() => setOpenPref(false)} />
+       <CertificadoDigitalModal open={openCert} onClose={() => setOpenCert(false)} />
++      <EditarUsuarioModal open={openUsuario} onClose={() => setOpenUsuario(false)} />
+     </div>
+   );
+ }
+diff --git a/src/pages/Login.jsx b/src/pages/Login.jsx
+index 2fc80c3..5dc2c3f 100644
+--- a/src/pages/Login.jsx
++++ b/src/pages/Login.jsx
+@@ -1,5 +1,5 @@
+ import { useState } from "react";
+-import { useNavigate, useLocation, Navigate } from "react-router-dom";
++import { useNavigate, useLocation, Navigate, Link } from "react-router-dom";
+ import { useAuth } from "../context/AuthContext";
+ import { Mail, Lock, Eye, EyeOff, LogIn, AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
+ 
+@@ -155,6 +155,9 @@ export default function Login() {
+           <p className="text-[11px] text-ink-500 mt-6 text-center">
+             Ao continuar, você concorda com os Termos de Uso e a Política de Privacidade da clínica.
+           </p>
++          <p className="text-xs text-ink-500 mt-3 text-center">
++            Ainda não tem conta? <Link to="/cadastro" className="text-brand-600 hover:text-brand-700 font-medium">Criar conta</Link>
++          </p>
+         </div>
+       </div>
+     </div>
+diff --git a/src/pages/Onboarding.jsx b/src/pages/Onboarding.jsx
+new file mode 100644
+index 0000000..c6fb2dc
+--- /dev/null
++++ b/src/pages/Onboarding.jsx
+@@ -0,0 +1,90 @@
++import { useState } from "react";
++import { Navigate, useNavigate } from "react-router-dom";
++import { useAuth } from "../context/AuthContext";
++import { criarClinica } from "../lib/onboarding";
++import { Building2, ArrowRight, AlertTriangle, Loader2, LogOut } from "lucide-react";
++
++export default function Onboarding() {
++  const { user, clinicaIds, loading: authLoading, logout, refrescarClaims, firebaseConfigured } = useAuth();
++  const navigate = useNavigate();
++
++  const [nomeClinica, setNomeClinica] = useState("");
++  const [criando, setCriando] = useState(false);
++  const [error, setError] = useState("");
++
++  if (!authLoading && !user) return <Navigate to="/login" replace />;
++  // Já tem clínica vinculada — não tem o que fazer aqui, manda pro app.
++  if (!authLoading && clinicaIds.length > 0) return <Navigate to="/" replace />;
++
++  async function handleSubmit(e) {
++    e.preventDefault();
++    if (!nomeClinica.trim()) return;
++    setError("");
++    setCriando(true);
++    try {
++      await criarClinica(nomeClinica.trim());
++      await refrescarClaims();
++      navigate("/", { replace: true });
++    } catch (err) {
++      console.error("Erro ao criar clínica:", err);
++      setError(err.message || "Não foi possível criar a clínica. Tente novamente.");
++    } finally {
++      setCriando(false);
++    }
++  }
++
++  return (
++    <div className="min-h-screen flex items-center justify-center bg-[#f4f8f8] p-4">
++      <div className="w-full max-w-md">
++        <div className="flex items-center gap-2 justify-center mb-8">
++          <div className="w-9 h-9 rounded-lg bg-brand-500 flex items-center justify-center font-display font-bold text-white text-sm">DP</div>
++          <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">PEP</span></span>
++        </div>
++
++        <div className="card p-7">
++          <div className="w-11 h-11 rounded-xl bg-brand-50 text-brand-600 flex items-center justify-center mb-4">
++            <Building2 size={20} />
++          </div>
++          <h1 className="font-display font-semibold text-lg text-ink-900">Vamos criar sua clínica</h1>
++          <p className="text-sm text-ink-500 mt-1 mb-6">
++            Sua conta ainda não tem nenhuma clínica vinculada. Dê um nome pra ela — dá pra ajustar os outros dados depois, em Configurações.
++          </p>
++
++          {!firebaseConfigured && (
++            <div className="mb-5 flex items-start gap-2.5 text-xs bg-amber-50 text-amber-700 border border-amber-100 rounded-lg p-3">
++              <AlertTriangle size={15} className="mt-0.5 shrink-0" /> Firebase ainda não configurado neste ambiente.
++            </div>
++          )}
++
++          <form onSubmit={handleSubmit} className="space-y-4">
++            <label className="block">
++              <span className="text-xs font-medium text-ink-500">Nome da clínica</span>
++              <input
++                required
++                value={nomeClinica}
++                onChange={(e) => setNomeClinica(e.target.value)}
++                placeholder="Ex: Clínica Diniz"
++                className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2.5 focus-ring"
++              />
++            </label>
++
++            {error && (
++              <div className="flex items-start gap-2 text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-3">
++                <AlertTriangle size={14} className="mt-0.5 shrink-0" /> {error}
++              </div>
++            )}
++
++            <button type="submit" disabled={criando} className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-70 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring">
++              {criando ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />}
++              {criando ? "Criando…" : "Criar clínica e continuar"}
++            </button>
++          </form>
++        </div>
++
++        <button onClick={logout} className="flex items-center gap-1.5 text-xs text-ink-500 hover:text-ink-900 mx-auto mt-5 focus-ring">
++          <LogOut size={13} /> Sair e entrar com outra conta
++        </button>
++      </div>
++    </div>
++  );
++}

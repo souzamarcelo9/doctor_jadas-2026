@@ -120,6 +120,15 @@ service cloud.firestore {
         allow delete: if souMembro(clinicaId);
       }
 
+      // ---- índice de "Assinaturas Pendentes" (espelhado por Cloud
+      // Function a partir de condutas/prescricoes/encaminhamentos — ver
+      // onModuloProntuarioEscrito em functions/index.js). Só leitura no
+      // client; quem escreve é sempre o Admin SDK, que ignora estas regras. ----
+      match /assinaturasPendentes/{id} {
+        allow read: if souMembro(clinicaId);
+        allow write: if false;
+      }
+
       // ---- lista de espera ----
       match /listaEspera/{id} {
         allow read, create, update, delete: if souMembro(clinicaId);

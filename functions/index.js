@@ -23,7 +23,12 @@ const memedSecretKey = defineSecret("MEMED_SECRET_KEY");
 
 const REGION = "southamerica-east1";
 const GROQ_STT_MODEL = "whisper-large-v3-turbo";
-const GROQ_CHAT_MODEL = "llama-3.3-70b-versatile";
+// A Groq descontinuou o "llama-3.3-70b-versatile" em 16/08/2026 (chamadas a
+// ele passaram a responder com erro "model_decommissioned", causando o
+// "Falha ao gerar o resumo da consulta" na tela de Atendimento). Trocado
+// para o substituto recomendado pela própria Groq nesse aviso de
+// depreciação: https://console.groq.com/docs/deprecations
+const GROQ_CHAT_MODEL = "openai/gpt-oss-120b";
 
 /**
  * Recebe o áudio gravado no navegador (base64) e devolve a transcrição,

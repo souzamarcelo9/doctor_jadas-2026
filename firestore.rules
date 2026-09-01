@@ -120,6 +120,11 @@ service cloud.firestore {
         allow delete: if souMembro(clinicaId);
       }
 
+      // ---- lista de espera ----
+      match /listaEspera/{id} {
+        allow read, create, update, delete: if souMembro(clinicaId);
+      }
+
       // ---- notas fiscais ----
       match /notasFiscais/{id} {
         allow read: if souMembro(clinicaId);

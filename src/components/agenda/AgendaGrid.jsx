@@ -3,14 +3,16 @@ import { Timestamp } from "firebase/firestore";
 import {
   ChevronLeft, ChevronRight, Users, PieChart, XCircle, Clock, Armchair, Lock,
   Stethoscope, UserCheck, CalendarCheck, RefreshCw, Settings2, Loader2,
+  CalendarSearch, Users2, Puzzle,
 } from "lucide-react";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreDoc, useFirestoreCollection } from "../../lib/firestore";
 import { useFirestoreQuery, where } from "../../lib/firestore";
 import { useNavigate } from "react-router-dom";
 import AgendamentoModal from "./AgendamentoModal";
-
-const diasSemanaChave = ["domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"];
+import ListaEsperaModal from "./ListaEsperaModal";
+import BuscaHorariosModal from "./BuscaHorariosModal";
+import { diasSemanaChave, gerarSlots, paraISO } from "../../lib/agendaSlots";
 
 const situacaoStyle = {
   agendado: { label: "Agendado", rowTone: "bg-blue-50", tag: "bg-blue-100 text-blue-700", icon: CalendarCheck },
@@ -23,25 +25,7 @@ const situacaoStyle = {
 };
 
 function hojeISO() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-function minutos(hhmm) { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; }
-function paraHHMM(min) { return `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`; }
-
-function gerarSlots(horarioDia) {
-  if (!horarioDia || !horarioDia.ativo) return [];
-  const inicio = minutos(horarioDia.primeiraConsulta);
-  const fim = minutos(horarioDia.ultimaConsulta);
-  const passo = minutos(horarioDia.tempoConsulta || "00:30");
-  const intInicio = horarioDia.inicioIntervalo && horarioDia.inicioIntervalo !== "--:--" ? minutos(horarioDia.inicioIntervalo) : null;
-  const intFim = horarioDia.fimIntervalo && horarioDia.fimIntervalo !== "--:--" ? minutos(horarioDia.fimIntervalo) : null;
-  const slots = [];
-  for (let t = inicio; t < fim; t += passo || 30) {
-    if (intInicio !== null && t >= intInicio && t < intFim) continue;
-    slots.push(paraHHMM(t));
-  }
-  return slots;
+  return paraISO(new Date());
 }
 
 export default function AgendaGrid({ onOpenHorarios }) {
@@ -49,6 +33,9 @@ export default function AgendaGrid({ onOpenHorarios }) {
   const navigate = useNavigate();
   const [dateISO, setDateISO] = useState(hojeISO());
   const [modalSlot, setModalSlot] = useState(null);
+  const [modalExtras, setModalExtras] = useState({});
+  const [showListaEspera, setShowListaEspera] = useState(false);
+  const [showBusca, setShowBusca] = useState(false);
 
   const { data: membro, loading: loadingMembro } = useFirestoreDoc(`clinicas/${clinicaId}/membros`, profissionalId);
   const { data: pacientes } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/pacientes` : null, "nome", "asc");
@@ -70,14 +57,31 @@ export default function AgendaGrid({ onOpenHorarios }) {
   const horarioDoDia = membro?.horariosTrabalho?.find((h) => h.dia === diaSemana);
   const slots = useMemo(() => gerarSlots(horarioDoDia), [horarioDoDia]);
 
-  const linhas = slots.map((hora) => {
-    const ag = agendamentos.find((a) => {
-      const d = a.dataHora?.toDate?.();
-      if (!d) return false;
-      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` === hora;
+  const linhas = useMemo(() => {
+    const porHora = slots.map((hora) => {
+      const ag = agendamentos.find((a) => {
+        const d = a.dataHora?.toDate?.();
+        if (!d) return false;
+        return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` === hora;
+      });
+      return { hora, agendamento: ag };
     });
-    return { hora, agendamento: ag };
-  });
+    // Encaixes: agendamentos cujo horário não bate com nenhum slot padrão do
+    // dia (ex: marcado às 09:15 num grid de 30 em 30 min) — mesclados aqui
+    // em vez de exigirem uma segunda tabela.
+    const encaixes = agendamentos
+      .filter((a) => {
+        const d = a.dataHora?.toDate?.();
+        if (!d) return false;
+        const hora = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+        return !slots.includes(hora);
+      })
+      .map((a) => {
+        const d = a.dataHora.toDate();
+        return { hora: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`, agendamento: a };
+      });
+    return [...porHora, ...encaixes].sort((a, b) => a.hora.localeCompare(b.hora));
+  }, [slots, agendamentos]);
 
   const ocupados = linhas.filter((l) => l.agendamento).length;
   const faltas = agendamentos.filter((a) => a.status === "faltou").length;
@@ -91,6 +95,20 @@ export default function AgendaGrid({ onOpenHorarios }) {
     { icon: Clock, label: "Previsão de saída", value: ultimoOcupado?.hora || "—", tone: "bg-brand-50 text-brand-600" },
     { icon: Armchair, label: "Sala de espera", value: presentes, tone: "bg-emerald-50 text-emerald-600" },
   ];
+
+  function horaArredondada() {
+    const d = new Date();
+    const min = d.getMinutes() < 30 ? 30 : 0;
+    if (min === 0) d.setHours(d.getHours() + 1);
+    d.setMinutes(min);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  }
+
+  function abrirNovoAgendamento({ data = dateISO, hora = horaArredondada(), ...extras } = {}) {
+    if (data !== dateISO) setDateISO(data);
+    setModalExtras(extras);
+    setModalSlot({ hora, agendamento: null });
+  }
 
   function mudarDia(delta) {
     const d = new Date(`${dateISO}T00:00:00`);
@@ -121,6 +139,17 @@ export default function AgendaGrid({ onOpenHorarios }) {
         <button onClick={() => mudarDia(-1)} className="p-1.5 rounded-lg border border-black/10 text-ink-500 focus-ring"><ChevronLeft size={14} /></button>
         <input type="date" value={dateISO} onChange={(e) => setDateISO(e.target.value)} className="text-xs border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
         <button onClick={() => mudarDia(1)} className="p-1.5 rounded-lg border border-black/10 text-ink-500 focus-ring"><ChevronRight size={14} /></button>
+
+        <button onClick={() => abrirNovoAgendamento({ forcarEncaixe: true })} className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-700 bg-white hover:bg-gray-50 border border-black/10 px-3 py-1.5 rounded-lg focus-ring">
+          <Puzzle size={13} /> Encaixe
+        </button>
+        <button onClick={() => setShowListaEspera(true)} className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-700 bg-white hover:bg-gray-50 border border-black/10 px-3 py-1.5 rounded-lg focus-ring">
+          <Users2 size={13} /> Lista de Espera
+        </button>
+        <button onClick={() => setShowBusca(true)} className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-700 bg-white hover:bg-gray-50 border border-black/10 px-3 py-1.5 rounded-lg focus-ring">
+          <CalendarSearch size={13} /> Localizar horários
+        </button>
+
         <div className="flex-1" />
         <button onClick={() => window.location.reload()} className="flex items-center gap-1.5 text-[11px] font-semibold text-brand-700 bg-brand-50 hover:bg-brand-100 border border-brand-100 px-3 py-1.5 rounded-lg focus-ring">
           <RefreshCw size={13} /> Atualizar
@@ -148,11 +177,11 @@ export default function AgendaGrid({ onOpenHorarios }) {
                 const s = situacaoStyle[agendamento?.status || "livre"];
                 const Icon = s.icon;
                 return (
-                  <tr key={hora} onClick={() => setModalSlot({ hora, agendamento })} className={`border-t border-black/5 ${s.rowTone} hover:bg-brand-50/50 cursor-pointer transition-colors`}>
+                  <tr key={hora} onClick={() => { setModalExtras({}); setModalSlot({ hora, agendamento }); }} className={`border-t border-black/5 ${s.rowTone} hover:bg-brand-50/50 cursor-pointer transition-colors`}>
                     <Td className="font-semibold text-brand-700 whitespace-nowrap">{hora}</Td>
                     <Td className="font-medium text-ink-900">{agendamento?.pacienteNome || ""}</Td>
                     <Td>{agendamento?.convenioNome || ""}</Td>
-                    <Td>{agendamento?.tipoAtendimento || ""}</Td>
+                    <Td>{agendamento?.tipoAtendimento || ""} {agendamento?.encaixe && <span className="ml-1 text-[9px] font-semibold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded-full align-middle">Encaixe</span>}</Td>
                     <Td>
                       <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${s.tag}`}>
                         <Icon size={11} /> {s.label}
@@ -173,8 +202,39 @@ export default function AgendaGrid({ onOpenHorarios }) {
           clinicaId={clinicaId}
           profissionalId={profissionalId}
           pacientes={pacientes}
-          onClose={() => setModalSlot(null)}
+          onClose={() => { setModalSlot(null); setModalExtras({}); }}
           onIrParaAtendimento={(pacienteId) => navigate(`/atendimento/${pacienteId}`)}
+          {...modalExtras}
+        />
+      )}
+
+      {showListaEspera && (
+        <ListaEsperaModal
+          clinicaId={clinicaId}
+          profissionalId={profissionalId}
+          nomeMedico={membro?.nome || ""}
+          pacientes={pacientes}
+          onClose={() => setShowListaEspera(false)}
+          onAgendar={(item) => {
+            setShowListaEspera(false);
+            abrirNovoAgendamento({
+              pacientePreSelecionado: item,
+              listaEsperaId: item.id,
+            });
+          }}
+        />
+      )}
+
+      {showBusca && (
+        <BuscaHorariosModal
+          clinicaId={clinicaId}
+          profissionalId={profissionalId}
+          membro={membro}
+          onClose={() => setShowBusca(false)}
+          onAgendar={(data, hora) => {
+            setShowBusca(false);
+            abrirNovoAgendamento({ data, hora });
+          }}
         />
       )}
     </div>

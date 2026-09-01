@@ -1,0 +1,48 @@
+rules_version = '2';
+
+// Isolamento por clínica (tenant) no Storage — usa o mesmo vínculo
+// `clinicas/{clinicaId}/membros/{uid}` já validado no firestore.rules como
+// fonte única de verdade, em vez de duplicar a lógica de papel/ativo aqui.
+// Assim, desativar um membro no Firestore já revoga o acesso dele aos
+// arquivos da clínica também, sem precisar lembrar de mexer em dois lugares.
+//
+// Cobre os caminhos hoje usados pelo app:
+//   clinicas/{clinicaId}/pacientes/{pacienteId}/perfil/...   (foto do paciente)
+//   clinicas/{clinicaId}/pacientes/{pacienteId}/imagens/...  (anexos do prontuário)
+//   clinicas/{clinicaId}/membros/{uid}/perfil/...            (foto do profissional)
+//
+// O certificado digital da NFS-e NÃO passa por aqui — fica no Secret
+// Manager, nunca no Storage (ver functions/index.js, nfseSalvarCertificado).
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function autenticado() {
+      return request.auth != null;
+    }
+
+    function souMembro(clinicaId) {
+      return autenticado() &&
+        firestore.exists(/databases/(default)/documents/clinicas/$(clinicaId)/membros/$(request.auth.uid)) &&
+        firestore.get(/databases/(default)/documents/clinicas/$(clinicaId)/membros/$(request.auth.uid)).data.ativo == true;
+    }
+
+    // Tamanho máximo por arquivo: 25 MB (cobre fotos e a maioria dos exames
+    // em PDF/imagem; ajuste aqui se precisar de laudos/DICOM maiores).
+    function tamanhoOk() {
+      return request.resource.size < 25 * 1024 * 1024;
+    }
+
+    match /clinicas/{clinicaId}/{allPaths=**} {
+      allow read: if souMembro(clinicaId);
+      allow write: if souMembro(clinicaId) && tamanhoOk();
+    }
+
+    // Qualquer coisa fora de /clinicas/** fica bloqueada por padrão — evita
+    // um upload cair sem querer fora do namespace da clínica e ficar sem
+    // regra nenhuma cobrindo.
+    match /{allOtherPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

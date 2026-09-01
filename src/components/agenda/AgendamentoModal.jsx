@@ -40,15 +40,17 @@ function pacienteVazio() {
   };
 }
 
-export default function AgendamentoModal({ slot, dateISO, clinicaId, profissionalId, pacientes, onClose, onIrParaAtendimento }) {
+export default function AgendamentoModal({ slot, dateISO, clinicaId, profissionalId, pacientes, onClose, onIrParaAtendimento, pacientePreSelecionado, forcarEncaixe, listaEsperaId }) {
   const editandoExistente = Boolean(slot.agendamento);
 
   const [novoPaciente, setNovoPaciente] = useState(false);
   const [busca, setBusca] = useState("");
-  const [pacienteSel, setPacienteSel] = useState(() =>
-    editandoExistente ? pacientes.find((p) => p.id === slot.agendamento.pacienteId) || null : null
-  );
-  const [form, setForm] = useState(() => (pacienteSel ? { ...pacienteVazio(), ...pacienteSel } : pacienteVazio()));
+  const [pacienteSel, setPacienteSel] = useState(() => {
+    if (editandoExistente) return pacientes.find((p) => p.id === slot.agendamento.pacienteId) || null;
+    if (pacientePreSelecionado) return pacientes.find((p) => p.id === pacientePreSelecionado.pacienteId) || null;
+    return null;
+  });
+  const [form, setForm] = useState(() => (pacienteSel ? { ...pacienteVazio(), ...pacienteSel } : { ...pacienteVazio(), nome: pacientePreSelecionado?.pacienteNome || "", celular: pacientePreSelecionado?.celular || "" }));
   const [fotoFile, setFotoFile] = useState(null);
   const [fotoPreview, setFotoPreview] = useState(pacienteSel?.fotoUrl || "");
   const [showComplementares, setShowComplementares] = useState(false);
@@ -62,8 +64,8 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
     hora: slot.hora,
     tipoConsulta: slot.agendamento?.tipoAtendimento || "CONSULTA",
     especialidade: slot.agendamento?.especialidade || "",
-    tipoAtendimento: slot.agendamento?.tipoAtendimentoDetalhe || "Consulta simples",
-    convenioId: slot.agendamento?.convenioId || "",
+    tipoAtendimento: slot.agendamento?.tipoAtendimentoDetalhe || (forcarEncaixe ? "Encaixe" : "Consulta simples"),
+    convenioId: slot.agendamento?.convenioId || pacientePreSelecionado?.convenioId || "",
     carteirinha: slot.agendamento?.carteirinha || "",
     servicoId: slot.agendamento?.servicoId || "",
     servicoNome: slot.agendamento?.servicoNome || "",
@@ -201,6 +203,7 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
         servicoNome: agendaForm.servicoNome || null,
         valor: valorNumerico,
         observacao: agendaForm.observacao || null,
+        encaixe: Boolean(forcarEncaixe) || slot.agendamento?.encaixe || false,
       };
 
       let agendamentoId = slot.agendamento?.id;
@@ -231,6 +234,10 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
         }
       }
 
+      if (listaEsperaId) {
+        await atualizarDocumento(`clinicas/${clinicaId}/listaEspera`, listaEsperaId, { status: "atendido" });
+      }
+
       onClose();
     } catch (err) {
       console.error("Erro ao salvar agendamento:", err);
@@ -258,7 +265,12 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
       <div className="absolute inset-0 bg-ink-900/40" onClick={onClose} />
       <div className="relative bg-white w-full max-w-2xl max-h-[92vh] rounded-xl2 shadow-pop overflow-hidden animate-slideIn flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 bg-brand-600 text-white shrink-0">
-          <span className="font-display font-semibold">Agendamento de paciente · {slot.hora} · {formatarDataBR(dateISO)}</span>
+          <span className="font-display font-semibold flex items-center gap-2">
+            Agendamento de paciente · {agendaForm.hora} · {formatarDataBR(dateISO)}
+            {(forcarEncaixe || slot.agendamento?.encaixe) && (
+              <span className="text-[10px] font-semibold bg-white/20 px-2 py-0.5 rounded-full">Encaixe</span>
+            )}
+          </span>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/15 focus-ring"><X size={18} /></button>
         </div>
 

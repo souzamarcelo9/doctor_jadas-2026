@@ -2,7 +2,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { initializeApp } = require("firebase-admin/app");
-const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const https = require("node:https");
 const crypto = require("node:crypto");
 const forge = require("node-forge");
@@ -20,6 +20,15 @@ const secretManager = new SecretManagerServiceClient();
 const groqApiKey = defineSecret("GROQ_API_KEY");
 const memedApiKey = defineSecret("MEMED_API_KEY");
 const memedSecretKey = defineSecret("MEMED_SECRET_KEY");
+// WhatsApp Business Cloud API (Meta) — usada só pelos lembretes automáticos
+// agendados (enviarLembretesAgendados, mais abaixo). Diferente do botão
+// manual de "Link de confirmação" (que abre wa.me e depende de alguém
+// clicar em enviar), isto manda mensagem de verdade sem intervenção
+// humana — e por isso exige a API oficial da Meta, com um template de
+// mensagem pré-aprovado. Ver o comentário da função pra instruções de
+// configuração.
+const whatsappToken = defineSecret("WHATSAPP_TOKEN");
+const whatsappPhoneNumberId = defineSecret("WHATSAPP_PHONE_NUMBER_ID");
 
 const REGION = "southamerica-east1";
 const GROQ_STT_MODEL = "whisper-large-v3-turbo";
@@ -913,3 +922,233 @@ exports.onModuloProntuarioEscrito = onDocumentWritten(
     });
   }
 );
+
+// ---------------------------------------------------------------------
+// Lembretes automáticos agendados (WhatsApp Business Cloud API — Meta)
+// ---------------------------------------------------------------------
+//
+// ⚠️ ISSO NÃO FUNCIONA "DE FÁBRICA" — exige configuração externa na Meta,
+// feita por vocês, antes de mandar mensagem de verdade:
+//
+//   1. Criar um app no Meta for Developers (business.facebook.com /
+//      developers.facebook.com) com o produto "WhatsApp" ativado.
+//   2. Registrar um número de telefone no WhatsApp Business (pode ser o
+//      número de teste da Meta pra homologar, e depois um número real).
+//   3. Criar e submeter um template de mensagem chamado, por padrão,
+//      "lembrete_consulta_24h" (nome configurável no código abaixo), com 2
+//      variáveis de corpo: {{1}} = primeiro nome do paciente, {{2}} = data
+//      e hora da consulta. Templates fora da janela de 24h de atendimento
+//      SEMPRE precisam ser aprovados pela Meta antes de poder ser usados —
+//      isso pode levar de minutos a alguns dias.
+//   4. Gerar um token de acesso permanente (via System User, não o token
+//      temporário de 24h) e pegar o Phone Number ID.
+//   5. Rodar:
+//        firebase functions:secrets:set WHATSAPP_TOKEN
+//        firebase functions:secrets:set WHATSAPP_PHONE_NUMBER_ID
+//
+// Sem os secrets configurados, a função abaixo detecta isso, registra um
+// aviso no log e não tenta enviar nada — ela não quebra o deploy nem falha
+// silenciosamente fingindo que enviou. Isso permite subir o código agora e
+// "ligar" os lembretes de verdade só quando a conta na Meta estiver pronta.
+//
+// Hoje a mesma conta/número do WhatsApp Business é compartilhada entre
+// todas as clínicas do SaaS (a mensagem menciona o nome da clínica no
+// corpo) — cada clínica ter seu próprio número exigiria o fluxo de
+// Embedded Signup da Meta, um projeto à parte.
+
+const { onSchedule } = require("firebase-functions/v2/scheduler");
+const NOME_TEMPLATE_LEMBRETE = "lembrete_consulta_24h";
+
+/** Normaliza telefone BR pro formato que a Cloud API da Meta espera:
+ * só dígitos, com código do país. */
+function paraE164Br(telefone) {
+  if (!telefone) return null;
+  const digitos = telefone.replace(/\D/g, "");
+  if (!digitos) return null;
+  return digitos.startsWith("55") && digitos.length >= 12 ? digitos : `55${digitos}`;
+}
+
+function enviarWhatsappTemplate(telefone, parametrosBody) {
+  const numero = paraE164Br(telefone);
+  if (!numero) return Promise.reject(new Error("Paciente sem telefone válido."));
+
+  const body = JSON.stringify({
+    messaging_product: "whatsapp",
+    to: numero,
+    type: "template",
+    template: {
+      name: NOME_TEMPLATE_LEMBRETE,
+      language: { code: "pt_BR" },
+      components: [{ type: "body", parameters: parametrosBody.map((texto) => ({ type: "text", text: texto })) }],
+    },
+  });
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: "graph.facebook.com",
+        path: `/v21.0/${whatsappPhoneNumberId.value()}/messages`,
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${whatsappToken.value()}`,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+        },
+        timeout: 15000,
+      },
+      (res) => {
+        let corpo = "";
+        res.on("data", (chunk) => (corpo += chunk));
+        res.on("end", () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) resolve(corpo);
+          else reject(new Error(`WhatsApp API respondeu ${res.statusCode}: ${corpo}`));
+        });
+      }
+    );
+    req.on("timeout", () => req.destroy(new Error("Tempo esgotado ao chamar a API do WhatsApp.")));
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+/**
+ * Roda a cada 30 minutos. Procura, em TODAS as clínicas, agendamentos que
+ * caem numa janela de ~24h a partir de agora, ainda não lembrados e não
+ * cancelados/faltosos, e manda o lembrete. Marca `lembrete24hEnviado: true`
+ * no próprio agendamento pra nunca mandar duas vezes (a janela de 1h com
+ * execução a cada 30min garante cobertura mesmo com pequenas variações de
+ * horário do agendador).
+ *
+ * Não usa collectionGroup — itera as clínicas e consulta a subcoleção de
+ * agendamentos de cada uma individualmente (mesma decisão de arquitetura
+ * das outras funções deste arquivo).
+ */
+exports.enviarLembretesAgendados = onSchedule(
+  { region: REGION, schedule: "every 30 minutes", timeoutSeconds: 300, secrets: [whatsappToken, whatsappPhoneNumberId] },
+  async () => {
+    if (!whatsappToken.value() || !whatsappPhoneNumberId.value()) {
+      logger.warn("WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID não configurados — pulando envio de lembretes. Ver instruções no topo desta função em functions/index.js.");
+      return;
+    }
+
+    const agora = new Date();
+    const janelaInicio = Timestamp.fromDate(new Date(agora.getTime() + 23.5 * 60 * 60 * 1000));
+    const janelaFim = Timestamp.fromDate(new Date(agora.getTime() + 24.5 * 60 * 60 * 1000));
+
+    const clinicasSnap = await db.collection("clinicas").get();
+
+    for (const clinicaDoc of clinicasSnap.docs) {
+      const clinicaId = clinicaDoc.id;
+      const clinicaNome = clinicaDoc.data().nome || "sua clínica";
+
+      let agendamentosSnap;
+      try {
+        agendamentosSnap = await db
+          .collection(`clinicas/${clinicaId}/agendamentos`)
+          .where("dataHora", ">=", janelaInicio)
+          .where("dataHora", "<", janelaFim)
+          .get();
+      } catch (err) {
+        logger.error(`Falha ao buscar agendamentos da clínica ${clinicaId} para lembrete:`, err);
+        continue;
+      }
+
+      for (const agDoc of agendamentosSnap.docs) {
+        const ag = agDoc.data();
+        if (ag.lembrete24hEnviado) continue;
+        if (["cancelado", "faltou"].includes(ag.status)) continue;
+        if (!ag.pacienteTelefone) continue;
+
+        const dataHora = ag.dataHora.toDate();
+        const dataFmt = dataHora.toLocaleDateString("pt-BR");
+        const horaFmt = dataHora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+        const primeiroNome = (ag.pacienteNome || "").split(" ")[0] || "";
+
+        try {
+          await enviarWhatsappTemplate(ag.pacienteTelefone, [primeiroNome, `${dataFmt} às ${horaFmt}`]);
+          await agDoc.ref.update({ lembrete24hEnviado: true });
+          await db.collection(`clinicas/${clinicaId}/notificacoes`).add({
+            tipo: "lembrete_24h",
+            canal: "whatsapp",
+            agendamentoId: agDoc.id,
+            pacienteId: ag.pacienteId || null,
+            pacienteNome: ag.pacienteNome || null,
+            telefone: ag.pacienteTelefone,
+            clinicaNome,
+            enviadoEm: new Date().toISOString(),
+          });
+        } catch (err) {
+          logger.error(`Falha ao enviar lembrete do agendamento ${agDoc.id} (clínica ${clinicaId}):`, err);
+        }
+      }
+    }
+  }
+);
+
+// ---------------------------------------------------------------------
+// Convite de equipe — admin adiciona alguém a uma clínica já existente
+// ---------------------------------------------------------------------
+//
+// Diferente do onboarding (que cria a PRIMEIRA clínica e o primeiro admin),
+// isto é usado quando um admin já dentro do sistema quer dar acesso a mais
+// alguém (outro médico, secretária, financeiro) a uma clínica que já existe.
+//
+// Não envia e-mail nenhum sozinho: quem chama esta função, do client, deve
+// em seguida chamar `resetPassword(email)` (já existente no AuthContext,
+// reaproveitando o fluxo de "esqueci minha senha") — isso dispara o e-mail
+// padrão do Firebase Auth pra pessoa convidada definir a própria senha,
+// sem precisar montar nenhum serviço de envio de e-mail próprio.
+const PAPEIS_VALIDOS = ["admin", "medico", "financeiro", "secretaria"];
+
+/**
+ * Entrada:  { clinicaId, email, nome, papel }
+ * Saída:    { ok: true, uid, jaExistiaConta }
+ */
+exports.convidarMembro = onCall({ region: REGION, timeoutSeconds: 30 }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId, email, nome, papel } = request.data || {};
+  if (!clinicaId || !email || !papel) {
+    throw new HttpsError("invalid-argument", "Preencha e-mail e papel da pessoa convidada.");
+  }
+  if (!PAPEIS_VALIDOS.includes(papel)) {
+    throw new HttpsError("invalid-argument", "Papel inválido.");
+  }
+
+  const meuMembroSnap = await db.doc(`clinicas/${clinicaId}/membros/${request.auth.uid}`).get();
+  if (!meuMembroSnap.exists || meuMembroSnap.data().papel !== "admin") {
+    throw new HttpsError("permission-denied", "Só administradores da clínica podem convidar novos membros.");
+  }
+
+  const authAdmin = getAuth();
+  let uid;
+  let jaExistiaConta;
+  try {
+    const existente = await authAdmin.getUserByEmail(email);
+    uid = existente.uid;
+    jaExistiaConta = true;
+  } catch (err) {
+    if (err.code !== "auth/user-not-found") throw err;
+    const novo = await authAdmin.createUser({ email, displayName: nome || email });
+    uid = novo.uid;
+    jaExistiaConta = false;
+  }
+
+  const membroRef = db.doc(`clinicas/${clinicaId}/membros/${uid}`);
+  if ((await membroRef.get()).exists) {
+    throw new HttpsError("already-exists", "Essa pessoa já faz parte desta clínica.");
+  }
+
+  await membroRef.set({
+    nome: nome || email,
+    email,
+    papel,
+    ativo: true,
+    criadoEm: new Date().toISOString(),
+    convidadoPor: request.auth.uid,
+  });
+  // onMembroEscrito (trigger, já existente) cuida do resto: espelha em
+  // usuarios/{uid}.clinicaIds e atualiza o custom claim `clinicas`.
+
+  return { ok: true, uid, jaExistiaConta };
+});

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate, useLocation, Navigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { Mail, Lock, Eye, EyeOff, LogIn, AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
+import logoNucleo from "../assets/logo-nucleo.png";
 
 const BG_IMAGE = "https://images.unsplash.com/photo-1532938911079-1b06ac7ceec7?fm=jpg&q=80&w=1800&auto=format&fit=crop";
 
@@ -47,9 +48,7 @@ export default function Login() {
         <div className="hidden lg:flex lg:col-span-2 flex-col justify-between p-8 bg-white/5 backdrop-blur-md border-r border-white/10 text-white">
           <div>
             <div className="flex items-center gap-2">
-              <div className="w-9 h-9 rounded-lg bg-brand-400 flex items-center justify-center font-display font-bold text-brand-950 text-sm">
-                DJads
-              </div>
+              <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
               <span className="font-display font-semibold tracking-wide">
                 Doctor<span className="text-brand-300">JADS</span>
               </span>
@@ -68,7 +67,7 @@ export default function Login() {
 
         <div className="lg:col-span-3 bg-white p-8 sm:p-10 flex flex-col justify-center">
           <div className="lg:hidden flex items-center gap-2 mb-8">
-            <div className="w-9 h-9 rounded-lg bg-brand-500 flex items-center justify-center font-display font-bold text-white text-sm">DP</div>
+            <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
             <span className="font-display font-semibold tracking-wide text-ink-900">
               Doctor<span className="text-brand-500">Jads</span>
             </span>

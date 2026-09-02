@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { criarClinica } from "../lib/onboarding";
 import { Building2, ArrowRight, AlertTriangle, Loader2, LogOut } from "lucide-react";
+import logoNucleo from "../assets/logo-nucleo.png";
 
 export default function Onboarding() {
   const { user, clinicaIds, loading: authLoading, logout, refrescarClaims, firebaseConfigured } = useAuth();
@@ -37,7 +38,7 @@ export default function Onboarding() {
     <div className="min-h-screen flex items-center justify-center bg-[#f4f8f8] p-4">
       <div className="w-full max-w-md">
         <div className="flex items-center gap-2 justify-center mb-8">
-          <div className="w-9 h-9 rounded-lg bg-brand-500 flex items-center justify-center font-display font-bold text-white text-sm">DP</div>
+          <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
           <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">PEP</span></span>
         </div>
 

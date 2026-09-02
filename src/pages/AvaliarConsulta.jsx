@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { Star, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
 import { useFirestoreDoc, atualizarDocumento } from "../lib/firestore";
+import logoNucleo from "../assets/logo-nucleo.png";
 
 export default function AvaliarConsulta() {
   const { clinicaId, avaliacaoId } = useParams();
@@ -35,7 +36,7 @@ export default function AvaliarConsulta() {
     <div className="min-h-screen flex items-center justify-center bg-[#f4f8f8] p-4">
       <div className="w-full max-w-md">
         <div className="flex items-center gap-2 justify-center mb-8">
-          <div className="w-9 h-9 rounded-lg bg-brand-500 flex items-center justify-center font-display font-bold text-white text-sm">DP</div>
+          <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
           <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">PEP</span></span>
         </div>
 

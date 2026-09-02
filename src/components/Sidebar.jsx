@@ -3,6 +3,7 @@ import {
   Home, CalendarDays, Users, Settings, FileSignature,
   ListTodo, BarChart3, Wallet, Sparkles, Receipt,
 } from "lucide-react";
+import logoNucleo from "../assets/logo-nucleo.png";
 
 const items = [
   { to: "/", icon: Home, label: "Página inicial" },
@@ -21,9 +22,7 @@ export default function Sidebar() {
   return (
     <aside className="hidden md:flex md:flex-col w-16 lg:w-56 shrink-0 bg-brand-900 text-white h-screen sticky top-0">
       <div className="h-16 flex items-center justify-center lg:justify-start lg:px-5 gap-2 border-b border-white/10">
-        <div className="w-8 h-8 rounded-lg bg-brand-400 flex items-center justify-center font-display font-bold text-brand-950 text-sm">
-          DJ
-        </div>
+        <img src={logoNucleo} alt="Núcleo" className="w-8 h-8 object-contain" />
         <span className="hidden lg:inline font-display font-semibold tracking-wide text-sm">
           Doctor<span className="text-brand-300">JADS</span>
         </span>

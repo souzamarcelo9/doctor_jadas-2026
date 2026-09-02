@@ -1,0 +1,598 @@
+diff --git a/firestore.rules b/firestore.rules
+index 858ad2e..a53c505 100644
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -120,6 +120,12 @@ service cloud.firestore {
+         allow delete: if souMembro(clinicaId);
+       }
+ 
++      // ---- tarefas ----
++      match /tarefas/{id} {
++        allow read, create, update: if souMembro(clinicaId);
++        allow delete: if souMembro(clinicaId) && (souAdmin(clinicaId) || request.auth.uid == resource.data.criadoPor);
++      }
++
+       // ---- índice de "Assinaturas Pendentes" (espelhado por Cloud
+       // Function a partir de condutas/prescricoes/encaminhamentos — ver
+       // onModuloProntuarioEscrito em functions/index.js). Só leitura no
+@@ -159,8 +165,24 @@ service cloud.firestore {
+ 
+       // ---- avaliações de pacientes (pesquisa de satisfação) ----
+       match /avaliacoes/{id} {
+-        allow read: if souMembro(clinicaId);
+-        allow create, update: if souMembro(clinicaId);
++        // O paciente responde sem estar logado — o link que ele recebe por
++        // e-mail leva direto ao ID do documento (Firestore auto-ID, ~120
++        // bits de aleatoriedade), que funciona como o "token" de acesso.
++        // `get` (buscar ESSE id específico) é liberado pra quem tiver o
++        // link enquanto a avaliação ainda não foi respondida; `list`
++        // continua fechado pra ninguém conseguir varrer avaliações de
++        // outros pacientes tentando adivinhar/enumerar IDs.
++        allow get: if souMembro(clinicaId) || resource.data.status == "pendente";
++        allow list: if souMembro(clinicaId);
++        allow create: if souMembro(clinicaId);
++        // Resposta do paciente: só enquanto pendente, e só pode tocar
++        // exatamente nesses 4 campos, virando "respondida" com nota de 1 a 5.
++        allow update: if souMembro(clinicaId) || (
++          resource.data.status == "pendente" &&
++          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["nota", "comentario", "status", "respondidoEm"]) &&
++          request.resource.data.status == "respondida" &&
++          request.resource.data.nota is int && request.resource.data.nota >= 1 && request.resource.data.nota <= 5
++        );
+         allow delete: if souAdmin(clinicaId);
+       }
+ 
+diff --git a/functions/index.js b/functions/index.js
+index 14378af..e4cfdaa 100644
+--- a/functions/index.js
++++ b/functions/index.js
+@@ -1,5 +1,5 @@
+ const { onCall, HttpsError } = require("firebase-functions/v2/https");
+-const { defineSecret } = require("firebase-functions/params");
++const { defineSecret, defineString } = require("firebase-functions/params");
+ const logger = require("firebase-functions/logger");
+ const { initializeApp } = require("firebase-admin/app");
+ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
+@@ -29,6 +29,16 @@ const memedSecretKey = defineSecret("MEMED_SECRET_KEY");
+ // configuração.
+ const whatsappToken = defineSecret("WHATSAPP_TOKEN");
+ const whatsappPhoneNumberId = defineSecret("WHATSAPP_PHONE_NUMBER_ID");
++// E-mail de avaliação pós-consulta — via Resend (https://resend.com), API
++// simples, sem precisar de servidor de e-mail próprio. Configurar com:
++//   firebase functions:secrets:set RESEND_API_KEY
++// EMAIL_FROM precisa ser um endereço de um domínio verificado no Resend
++// pra funcionar em produção (o domínio de teste deles só entrega pro
++// próprio e-mail da conta Resend). APP_BASE_URL é opcional — sem
++// configurar, cai no domínio padrão do Firebase Hosting do projeto.
++const resendApiKey = defineSecret("RESEND_API_KEY");
++const emailFromParam = defineString("EMAIL_FROM", { default: "avaliacao@resend.dev" });
++const appBaseUrlParam = defineString("APP_BASE_URL", { default: "" });
+ 
+ const REGION = "southamerica-east1";
+ const GROQ_STT_MODEL = "whisper-large-v3-turbo";
+@@ -1152,3 +1162,123 @@ exports.convidarMembro = onCall({ region: REGION, timeoutSeconds: 30 }, async (r
+ 
+   return { ok: true, uid, jaExistiaConta };
+ });
++
++// ---------------------------------------------------------------------
++// E-mail de avaliação pós-consulta
++// ---------------------------------------------------------------------
++//
++// Envia, via Resend (https://resend.com), um e-mail com um link único pro
++// paciente avaliar a consulta sem precisar de conta/login — o próprio ID do
++// documento criado (aleatório, ~120 bits de entropia) funciona como o
++// token de acesso do link (ver a regra em firestore.rules, avaliacoes/{id}).
++//
++// ⚠️ Precisa de configuração externa antes de funcionar de verdade:
++//   1. Criar conta em resend.com, verificar um domínio de envio.
++//   2. firebase functions:secrets:set RESEND_API_KEY
++//   3. (opcional) firebase functions:config ou .env do projeto de functions
++//      pra customizar EMAIL_FROM / APP_BASE_URL via `firebase deploy` com
++//      --only functions e os params configurados no console, se o domínio
++//      verificado ou o domínio do app não forem os padrões.
++// Sem RESEND_API_KEY configurada, a função retorna um erro claro em vez de
++// fingir que enviou.
++
++function obterBaseUrl() {
++  const configurado = appBaseUrlParam.value();
++  if (configurado) return configurado.replace(/\/$/, "");
++  const projectId = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "";
++  return projectId ? `https://${projectId}.web.app` : "";
++}
++
++function enviarEmailResend({ para, assunto, html }) {
++  const body = JSON.stringify({ from: emailFromParam.value(), to: [para], subject: assunto, html });
++  return new Promise((resolve, reject) => {
++    const req = https.request(
++      {
++        hostname: "api.resend.com",
++        path: "/emails",
++        method: "POST",
++        headers: {
++          Authorization: `Bearer ${resendApiKey.value()}`,
++          "Content-Type": "application/json",
++          "Content-Length": Buffer.byteLength(body),
++        },
++        timeout: 15000,
++      },
++      (res) => {
++        let corpo = "";
++        res.on("data", (chunk) => (corpo += chunk));
++        res.on("end", () => {
++          if (res.statusCode >= 200 && res.statusCode < 300) resolve(corpo);
++          else reject(new Error(`Resend respondeu ${res.statusCode}: ${corpo}`));
++        });
++      }
++    );
++    req.on("timeout", () => req.destroy(new Error("Tempo esgotado ao chamar a API do Resend.")));
++    req.on("error", reject);
++    req.write(body);
++    req.end();
++  });
++}
++
++/**
++ * Cria a avaliação pendente e dispara o e-mail pro paciente.
++ *
++ * Entrada:  { clinicaId, pacienteId, atendimentoId? }
++ * Saída:    { ok: true, avaliacaoId }
++ */
++exports.enviarAvaliacaoPaciente = onCall({ region: REGION, timeoutSeconds: 30, secrets: [resendApiKey] }, async (request) => {
++  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
++  const { clinicaId, pacienteId, atendimentoId } = request.data || {};
++  if (!clinicaId || !pacienteId) throw new HttpsError("invalid-argument", "Dados incompletos.");
++
++  const membroSnap = await db.doc(`clinicas/${clinicaId}/membros/${request.auth.uid}`).get();
++  if (!membroSnap.exists || membroSnap.data().ativo !== true) {
++    throw new HttpsError("permission-denied", "Você precisa ser membro desta clínica.");
++  }
++  if (!resendApiKey.value()) {
++    throw new HttpsError("failed-precondition", "Envio de e-mail de avaliação ainda não configurado neste ambiente (RESEND_API_KEY ausente). Avise o administrador do sistema.");
++  }
++
++  const pacienteSnap = await db.doc(`clinicas/${clinicaId}/pacientes/${pacienteId}`).get();
++  if (!pacienteSnap.exists) throw new HttpsError("not-found", "Paciente não encontrado.");
++  const paciente = pacienteSnap.data();
++  if (!paciente.email) {
++    throw new HttpsError("failed-precondition", "Este paciente não tem e-mail cadastrado.");
++  }
++
++  const clinicaSnap = await db.doc(`clinicas/${clinicaId}`).get();
++  const clinicaNome = clinicaSnap.data()?.nome || "sua clínica";
++
++  const avaliacaoRef = await db.collection(`clinicas/${clinicaId}/avaliacoes`).add({
++    pacienteId,
++    pacienteNome: paciente.nome || null,
++    pacienteEmail: paciente.email,
++    atendimentoId: atendimentoId || null,
++    clinicaNome,
++    enviadoPor: request.auth.uid,
++    status: "pendente",
++    criadoEm: new Date().toISOString(),
++  });
++
++  const link = `${obterBaseUrl()}/avaliar/${clinicaId}/${avaliacaoRef.id}`;
++  const primeiroNome = (paciente.nome || "").split(" ")[0] || "";
++
++  try {
++    await enviarEmailResend({
++      para: paciente.email,
++      assunto: `Como foi sua consulta na ${clinicaNome}?`,
++      html: `
++        <p>Olá, ${primeiroNome}!</p>
++        <p>Sua opinião ajuda a ${clinicaNome} a melhorar o atendimento. Pode avaliar sua consulta recente?</p>
++        <p><a href="${link}" style="display:inline-block;background:#0d9488;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">Avaliar consulta</a></p>
++        <p style="color:#888;font-size:12px">Se o botão não funcionar, copie e cole este link no navegador: ${link}</p>
++      `,
++    });
++  } catch (err) {
++    logger.error("Falha ao enviar e-mail de avaliação via Resend:", err);
++    await avaliacaoRef.delete().catch(() => {});
++    throw new HttpsError("internal", "Não foi possível enviar o e-mail. Verifique a configuração do Resend (domínio verificado, RESEND_API_KEY).");
++  }
++
++  return { ok: true, avaliacaoId: avaliacaoRef.id };
++});
+diff --git a/src/App.jsx b/src/App.jsx
+index 61ed5df..b104ca7 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -6,6 +6,7 @@ import Sidebar from "./components/Sidebar";
+ import Login from "./pages/Login";
+ import Cadastro from "./pages/Cadastro";
+ import Onboarding from "./pages/Onboarding";
++import AvaliarConsulta from "./pages/AvaliarConsulta";
+ import Dashboard from "./pages/Dashboard";
+ import Agenda from "./pages/Agenda";
+ import Pacientes from "./pages/Pacientes";
+@@ -17,6 +18,7 @@ import Financeiro from "./pages/Financeiro";
+ import Relatorios from "./pages/Relatorios";
+ import Placeholder from "./pages/Placeholder";
+ import AssinaturasPendentes from "./pages/AssinaturasPendentes";
++import Tarefas from "./pages/Tarefas";
+ 
+ function AppLayout() {
+   return (
+@@ -39,6 +41,7 @@ export default function App() {
+           <Route path="/login" element={<Login />} />
+           <Route path="/cadastro" element={<Cadastro />} />
+           <Route path="/onboarding" element={<ProtectedRoute><Onboarding /></ProtectedRoute>} />
++          <Route path="/avaliar/:clinicaId/:avaliacaoId" element={<AvaliarConsulta />} />
+           <Route element={<AppLayout />}>
+             <Route path="/" element={<Dashboard />} />
+             <Route path="/agenda" element={<Agenda />} />
+@@ -49,7 +52,7 @@ export default function App() {
+             <Route path="/config" element={<Config />} />
+             <Route path="/relatorios" element={<Relatorios />} />
+             <Route path="/financeiro" element={<Financeiro />} />
+-            <Route path="/tarefas" element={<Placeholder title="Tarefas" />} />
++            <Route path="/tarefas" element={<Tarefas />} />
+             <Route path="/assinaturas" element={<AssinaturasPendentes />} />
+             <Route path="*" element={<Placeholder title="Página não encontrada" />} />
+           </Route>
+diff --git a/src/lib/avaliacoes.js b/src/lib/avaliacoes.js
+new file mode 100644
+index 0000000..42a4c77
+--- /dev/null
++++ b/src/lib/avaliacoes.js
+@@ -0,0 +1,11 @@
++import { httpsCallable } from "firebase/functions";
++import { functionsInstance, firebaseConfigured } from "../firebase";
++
++/** Cria a avaliação pendente e dispara o e-mail pro paciente avaliar a
++ * consulta, com um link que não exige login (ver AvaliarConsulta.jsx). */
++export async function enviarAvaliacaoPaciente(clinicaId, pacienteId, atendimentoId) {
++  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
++  const chamar = httpsCallable(functionsInstance, "enviarAvaliacaoPaciente");
++  const { data } = await chamar({ clinicaId, pacienteId, atendimentoId: atendimentoId || null });
++  return data; // { ok, avaliacaoId }
++}
+diff --git a/src/pages/Atendimento.jsx b/src/pages/Atendimento.jsx
+index eab2345..0fdb342 100644
+--- a/src/pages/Atendimento.jsx
++++ b/src/pages/Atendimento.jsx
+@@ -17,7 +17,8 @@ import Prescricoes from "../components/atendimento/Prescricoes";
+ import Encaminhamento from "../components/atendimento/Encaminhamento";
+ import Formularios from "../components/atendimento/Formularios";
+ import { useTenant } from "../context/TenantContext";
+-import { Trash2, CheckCircle2, Loader2 } from "lucide-react";
++import { enviarAvaliacaoPaciente } from "../lib/avaliacoes";
++import { Trash2, CheckCircle2, Loader2, Star } from "lucide-react";
+ 
+ const tabs = [
+   "Queixa Paciente", "Histórico", "Exame físico", "Problemas", "Alergias",
+@@ -33,6 +34,7 @@ export default function Atendimento() {
+   const [seconds, setSeconds] = useState(0);
+   const [percOpen, setPercOpen] = useState(false);
+   const [finalizando, setFinalizando] = useState(false);
++  const [enviarAvaliacao, setEnviarAvaliacao] = useState(true);
+ 
+   useEffect(() => {
+     if (pacienteIdRota && pacienteIdRota !== pacienteId) {
+@@ -52,6 +54,18 @@ export default function Atendimento() {
+     setFinalizando(true);
+     try {
+       await finalizarAtendimento();
++      if (enviarAvaliacao) {
++        // Best-effort: se o e-mail de avaliação falhar (ex: Resend não
++        // configurado ainda), não impede o profissional de fechar o
++        // atendimento — só avisamos, sem travar a navegação.
++        try {
++          await enviarAvaliacaoPaciente(clinicaId, pacienteId);
++        } catch (err) {
++          // Best-effort: não bloqueia a navegação por causa disso (ex:
++          // Resend ainda não configurado) — só registra no console.
++          console.error("Erro ao enviar avaliação:", err);
++        }
++      }
+       navigate("/pacientes");
+     } finally {
+       setFinalizando(false);
+@@ -101,7 +115,11 @@ export default function Atendimento() {
+           <div className="p-4 lg:p-5">{renderTab()}</div>
+         </div>
+       </main>
+-      <div className="sticky bottom-0 bg-white border-t border-black/5 px-4 lg:px-6 py-3 flex justify-end gap-2">
++      <div className="sticky bottom-0 bg-white border-t border-black/5 px-4 lg:px-6 py-3 flex items-center justify-end gap-3">
++        <label className="flex items-center gap-1.5 text-xs text-ink-500 mr-auto">
++          <input type="checkbox" checked={enviarAvaliacao} onChange={(e) => setEnviarAvaliacao(e.target.checked)} className="rounded focus-ring" />
++          <Star size={13} /> Enviar avaliação por e-mail ao finalizar
++        </label>
+         <button onClick={() => navigate("/pacientes")} className="flex items-center gap-1.5 bg-rose-500 hover:bg-rose-600 text-white text-sm font-semibold px-4 py-2 rounded-lg focus-ring">
+           <Trash2 size={15} /> Cancelar
+         </button>
+diff --git a/src/pages/AvaliarConsulta.jsx b/src/pages/AvaliarConsulta.jsx
+new file mode 100644
+index 0000000..8b5ad61
+--- /dev/null
++++ b/src/pages/AvaliarConsulta.jsx
+@@ -0,0 +1,100 @@
++import { useState } from "react";
++import { useParams } from "react-router-dom";
++import { Star, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
++import { useFirestoreDoc, atualizarDocumento } from "../lib/firestore";
++
++export default function AvaliarConsulta() {
++  const { clinicaId, avaliacaoId } = useParams();
++  const { data: avaliacao, loading } = useFirestoreDoc(clinicaId ? `clinicas/${clinicaId}/avaliacoes` : null, avaliacaoId);
++
++  const [nota, setNota] = useState(0);
++  const [hoverNota, setHoverNota] = useState(0);
++  const [comentario, setComentario] = useState("");
++  const [enviando, setEnviando] = useState(false);
++  const [erro, setErro] = useState("");
++  const [enviado, setEnviado] = useState(false);
++
++  async function enviar() {
++    setErro("");
++    if (nota === 0) { setErro("Toque em uma estrela pra dar sua nota."); return; }
++    setEnviando(true);
++    try {
++      await atualizarDocumento(`clinicas/${clinicaId}/avaliacoes`, avaliacaoId, {
++        nota, comentario: comentario.trim() || null, status: "respondida", respondidoEm: new Date().toISOString(),
++      });
++      setEnviado(true);
++    } catch (err) {
++      console.error("Erro ao enviar avaliação:", err);
++      setErro("Não foi possível enviar. Tente novamente em alguns instantes.");
++    } finally {
++      setEnviando(false);
++    }
++  }
++
++  return (
++    <div className="min-h-screen flex items-center justify-center bg-[#f4f8f8] p-4">
++      <div className="w-full max-w-md">
++        <div className="flex items-center gap-2 justify-center mb-8">
++          <div className="w-9 h-9 rounded-lg bg-brand-500 flex items-center justify-center font-display font-bold text-white text-sm">DP</div>
++          <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">PEP</span></span>
++        </div>
++
++        <div className="card p-7 text-center">
++          {loading && <div className="flex items-center justify-center gap-2 text-sm text-ink-500 py-8"><Loader2 size={16} className="animate-spin" /> Carregando…</div>}
++
++          {!loading && !avaliacao && (
++            <div className="py-6">
++              <AlertTriangle size={26} className="mx-auto text-amber-500 mb-2" />
++              <p className="text-sm font-semibold text-ink-900">Link inválido ou expirado</p>
++              <p className="text-xs text-ink-500 mt-1">Esse link de avaliação não existe mais.</p>
++            </div>
++          )}
++
++          {!loading && avaliacao && (avaliacao.status === "respondida" || enviado) && (
++            <div className="py-6">
++              <CheckCircle2 size={30} className="mx-auto text-emerald-500 mb-2" />
++              <p className="text-sm font-semibold text-ink-900">Obrigado pela sua avaliação!</p>
++              <p className="text-xs text-ink-500 mt-1">Sua opinião ajuda a {avaliacao.clinicaNome || "clínica"} a melhorar.</p>
++            </div>
++          )}
++
++          {!loading && avaliacao && avaliacao.status === "pendente" && !enviado && (
++            <>
++              <h1 className="font-display font-semibold text-lg text-ink-900">Como foi sua consulta?</h1>
++              <p className="text-sm text-ink-500 mt-1 mb-5">{avaliacao.clinicaNome}</p>
++
++              <div className="flex items-center justify-center gap-1.5 mb-5">
++                {[1, 2, 3, 4, 5].map((n) => (
++                  <button
++                    key={n}
++                    type="button"
++                    onMouseEnter={() => setHoverNota(n)}
++                    onMouseLeave={() => setHoverNota(0)}
++                    onClick={() => setNota(n)}
++                    className="focus-ring rounded"
++                  >
++                    <Star size={32} className={(hoverNota || nota) >= n ? "fill-amber-400 text-amber-400" : "text-gray-300"} />
++                  </button>
++                ))}
++              </div>
++
++              <textarea
++                value={comentario}
++                onChange={(e) => setComentario(e.target.value)}
++                placeholder="Quer contar mais alguma coisa? (opcional)"
++                rows={3}
++                className="w-full text-sm border border-black/10 rounded-lg px-3 py-2.5 focus-ring resize-none"
++              />
++
++              {erro && <div className="mt-3 text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-3">{erro}</div>}
++
++              <button onClick={enviar} disabled={enviando} className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-70 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring mt-4">
++                {enviando ? <Loader2 size={16} className="animate-spin" /> : null} Enviar avaliação
++              </button>
++            </>
++          )}
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/src/pages/Config.jsx b/src/pages/Config.jsx
+index f06f20f..d178046 100644
+--- a/src/pages/Config.jsx
++++ b/src/pages/Config.jsx
+@@ -1,4 +1,5 @@
+ import { useState } from "react";
++import { useNavigate } from "react-router-dom";
+ import Topbar from "../components/Topbar";
+ import PreferenciasModal from "../components/PreferenciasModal";
+ import CertificadoDigitalModal from "../components/CertificadoDigitalModal";
+@@ -16,6 +17,7 @@ const cards = [
+ ];
+ 
+ export default function Config() {
++  const navigate = useNavigate();
+   const [openPref, setOpenPref] = useState(false);
+   const [openCert, setOpenCert] = useState(false);
+   const [openUsuario, setOpenUsuario] = useState(false);
+@@ -26,6 +28,7 @@ export default function Config() {
+     if (title === "Certificado Digital") setOpenCert(true);
+     if (title === "Editar Usuário") setOpenUsuario(true);
+     if (title === "Equipe") setOpenEquipe(true);
++    if (title === "Lista de Tarefas") navigate("/tarefas");
+   }
+ 
+   return (
+diff --git a/src/pages/Tarefas.jsx b/src/pages/Tarefas.jsx
+new file mode 100644
+index 0000000..24c1bac
+--- /dev/null
++++ b/src/pages/Tarefas.jsx
+@@ -0,0 +1,156 @@
++import { useState } from "react";
++import Topbar from "../components/Topbar";
++import { ListTodo, Plus, Loader2, Trash2, CheckCircle2, Circle, AlertTriangle } from "lucide-react";
++import { useTenant } from "../context/TenantContext";
++import { useFirestoreCollection, criarDocumento, atualizarDocumento, excluirDocumento } from "../lib/firestore";
++
++const prioridadeInfo = {
++  alta: { label: "Alta", tone: "bg-rose-50 text-rose-700" },
++  media: { label: "Média", tone: "bg-amber-50 text-amber-700" },
++  baixa: { label: "Baixa", tone: "bg-emerald-50 text-emerald-700" },
++};
++
++function formularioVazio() {
++  return { titulo: "", descricao: "", atribuidoA: "", prioridade: "media", prazo: "" };
++}
++
++export default function Tarefas() {
++  const { clinicaId, profissionalId } = useTenant();
++  const { data: tarefas, loading } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/tarefas` : null, "criadoEm", "desc");
++  const { data: membros } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/membros` : null, "nome", "asc");
++
++  const [filtro, setFiltro] = useState("minhas"); // "minhas" | "todas" | "concluidas"
++  const [form, setForm] = useState(formularioVazio());
++  const [criando, setCriando] = useState(false);
++  const [erro, setErro] = useState("");
++
++  const visiveis = tarefas.filter((t) => {
++    if (filtro === "concluidas") return t.status === "concluida";
++    if (t.status === "concluida") return false;
++    if (filtro === "minhas") return t.atribuidoA === profissionalId;
++    return true;
++  });
++
++  async function criar(e) {
++    e.preventDefault();
++    setErro("");
++    if (!form.titulo.trim()) { setErro("Dê um título pra tarefa."); return; }
++    setCriando(true);
++    try {
++      const responsavel = membros.find((m) => m.id === form.atribuidoA);
++      await criarDocumento(`clinicas/${clinicaId}/tarefas`, {
++        titulo: form.titulo.trim(),
++        descricao: form.descricao.trim() || null,
++        atribuidoA: form.atribuidoA || profissionalId,
++        atribuidoNome: responsavel?.nome || "Você",
++        prioridade: form.prioridade,
++        prazo: form.prazo || null,
++        status: "pendente",
++        criadoPor: profissionalId,
++      });
++      setForm(formularioVazio());
++    } catch (err) {
++      console.error("Erro ao criar tarefa:", err);
++      setErro(err.message || "Não foi possível criar a tarefa.");
++    } finally {
++      setCriando(false);
++    }
++  }
++
++  async function alternarConcluida(tarefa) {
++    await atualizarDocumento(`clinicas/${clinicaId}/tarefas`, tarefa.id, {
++      status: tarefa.status === "concluida" ? "pendente" : "concluida",
++    });
++  }
++
++  async function remover(id) {
++    await excluirDocumento(`clinicas/${clinicaId}/tarefas`, id);
++  }
++
++  return (
++    <div className="flex-1 flex flex-col min-w-0">
++      <Topbar title="Lista de Tarefas" />
++      <main className="flex-1 p-4 lg:p-6 space-y-4">
++        <form onSubmit={criar} className="card p-4 space-y-3">
++          <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-700"><Plus size={14} /> Nova tarefa</div>
++          <input
++            value={form.titulo}
++            onChange={(e) => setForm({ ...form, titulo: e.target.value })}
++            placeholder="O que precisa ser feito?"
++            className="w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring"
++          />
++          <div className="grid sm:grid-cols-3 gap-3">
++            <label className="block text-xs">
++              <span className="text-ink-500 font-medium">Atribuir a</span>
++              <select value={form.atribuidoA} onChange={(e) => setForm({ ...form, atribuidoA: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring">
++                <option value="">Você</option>
++                {membros.map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
++              </select>
++            </label>
++            <label className="block text-xs">
++              <span className="text-ink-500 font-medium">Prioridade</span>
++              <select value={form.prioridade} onChange={(e) => setForm({ ...form, prioridade: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring">
++                <option value="baixa">Baixa</option>
++                <option value="media">Média</option>
++                <option value="alta">Alta</option>
++              </select>
++            </label>
++            <label className="block text-xs">
++              <span className="text-ink-500 font-medium">Prazo</span>
++              <input type="date" value={form.prazo} onChange={(e) => setForm({ ...form, prazo: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
++            </label>
++          </div>
++          {erro && <div className="flex items-start gap-2 text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-3"><AlertTriangle size={13} className="mt-0.5 shrink-0" /> {erro}</div>}
++          <button type="submit" disabled={criando} className="flex items-center gap-1.5 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-xs font-semibold px-4 py-2 rounded-lg focus-ring">
++            {criando ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Adicionar
++          </button>
++        </form>
++
++        <div className="flex items-center gap-2">
++          {[{ v: "minhas", label: "Minhas tarefas" }, { v: "todas", label: "Todas" }, { v: "concluidas", label: "Concluídas" }].map((f) => (
++            <button
++              key={f.v}
++              onClick={() => setFiltro(f.v)}
++              className={`text-xs font-semibold px-3 py-1.5 rounded-lg focus-ring ${filtro === f.v ? "bg-brand-600 text-white" : "bg-white border border-black/10 text-ink-700 hover:bg-gray-50"}`}
++            >
++              {f.label}
++            </button>
++          ))}
++        </div>
++
++        {loading && <div className="text-xs text-ink-500 flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Carregando…</div>}
++
++        {!loading && visiveis.length === 0 && (
++          <div className="card p-8 text-center">
++            <ListTodo size={26} className="mx-auto text-ink-400 mb-2" />
++            <p className="text-sm text-ink-500">Nenhuma tarefa por aqui.</p>
++          </div>
++        )}
++
++        <div className="space-y-2">
++          {visiveis.map((t) => {
++            const p = prioridadeInfo[t.prioridade] || prioridadeInfo.media;
++            const concluida = t.status === "concluida";
++            return (
++              <div key={t.id} className={`card p-3.5 flex items-start gap-3 ${concluida ? "opacity-60" : ""}`}>
++                <button onClick={() => alternarConcluida(t)} className="mt-0.5 text-brand-600 hover:text-brand-700 focus-ring shrink-0">
++                  {concluida ? <CheckCircle2 size={18} /> : <Circle size={18} />}
++                </button>
++                <div className="flex-1 min-w-0">
++                  <div className={`text-sm font-semibold text-ink-900 ${concluida ? "line-through" : ""}`}>{t.titulo}</div>
++                  {t.descricao && <p className="text-xs text-ink-500 mt-0.5">{t.descricao}</p>}
++                  <div className="flex items-center gap-2 flex-wrap mt-1.5">
++                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${p.tone}`}>{p.label}</span>
++                    <span className="text-[11px] text-ink-500">{t.atribuidoNome}</span>
++                    {t.prazo && <span className="text-[11px] text-ink-500">· prazo {t.prazo.split("-").reverse().join("/")}</span>}
++                  </div>
++                </div>
++                <button onClick={() => remover(t.id)} className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 focus-ring shrink-0"><Trash2 size={14} /></button>
++              </div>
++            );
++          })}
++        </div>
++      </main>
++    </div>
++  );
++}

@@ -120,6 +120,12 @@ service cloud.firestore {
         allow delete: if souMembro(clinicaId);
       }
 
+      // ---- tarefas ----
+      match /tarefas/{id} {
+        allow read, create, update: if souMembro(clinicaId);
+        allow delete: if souMembro(clinicaId) && (souAdmin(clinicaId) || request.auth.uid == resource.data.criadoPor);
+      }
+
       // ---- índice de "Assinaturas Pendentes" (espelhado por Cloud
       // Function a partir de condutas/prescricoes/encaminhamentos — ver
       // onModuloProntuarioEscrito em functions/index.js). Só leitura no
@@ -159,8 +165,24 @@ service cloud.firestore {
 
       // ---- avaliações de pacientes (pesquisa de satisfação) ----
       match /avaliacoes/{id} {
-        allow read: if souMembro(clinicaId);
-        allow create, update: if souMembro(clinicaId);
+        // O paciente responde sem estar logado — o link que ele recebe por
+        // e-mail leva direto ao ID do documento (Firestore auto-ID, ~120
+        // bits de aleatoriedade), que funciona como o "token" de acesso.
+        // `get` (buscar ESSE id específico) é liberado pra quem tiver o
+        // link enquanto a avaliação ainda não foi respondida; `list`
+        // continua fechado pra ninguém conseguir varrer avaliações de
+        // outros pacientes tentando adivinhar/enumerar IDs.
+        allow get: if souMembro(clinicaId) || resource.data.status == "pendente";
+        allow list: if souMembro(clinicaId);
+        allow create: if souMembro(clinicaId);
+        // Resposta do paciente: só enquanto pendente, e só pode tocar
+        // exatamente nesses 4 campos, virando "respondida" com nota de 1 a 5.
+        allow update: if souMembro(clinicaId) || (
+          resource.data.status == "pendente" &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["nota", "comentario", "status", "respondidoEm"]) &&
+          request.resource.data.status == "respondida" &&
+          request.resource.data.nota is int && request.resource.data.nota >= 1 && request.resource.data.nota <= 5
+        );
         allow delete: if souAdmin(clinicaId);
       }
 

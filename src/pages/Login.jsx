@@ -48,10 +48,10 @@ export default function Login() {
           <div>
             <div className="flex items-center gap-2">
               <div className="w-9 h-9 rounded-lg bg-brand-400 flex items-center justify-center font-display font-bold text-brand-950 text-sm">
-                DP
+                DJads
               </div>
               <span className="font-display font-semibold tracking-wide">
-                Doctor<span className="text-brand-300">PEP</span>
+                Doctor<span className="text-brand-300">JADS</span>
               </span>
             </div>
             <h1 className="font-display font-semibold text-2xl leading-snug mt-10">
@@ -70,7 +70,7 @@ export default function Login() {
           <div className="lg:hidden flex items-center gap-2 mb-8">
             <div className="w-9 h-9 rounded-lg bg-brand-500 flex items-center justify-center font-display font-bold text-white text-sm">DP</div>
             <span className="font-display font-semibold tracking-wide text-ink-900">
-              Doctor<span className="text-brand-500">PEP</span>
+              Doctor<span className="text-brand-500">Jads</span>
             </span>
           </div>
 

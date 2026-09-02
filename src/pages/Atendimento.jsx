@@ -17,7 +17,8 @@ import Prescricoes from "../components/atendimento/Prescricoes";
 import Encaminhamento from "../components/atendimento/Encaminhamento";
 import Formularios from "../components/atendimento/Formularios";
 import { useTenant } from "../context/TenantContext";
-import { Trash2, CheckCircle2, Loader2 } from "lucide-react";
+import { enviarAvaliacaoPaciente } from "../lib/avaliacoes";
+import { Trash2, CheckCircle2, Loader2, Star } from "lucide-react";
 
 const tabs = [
   "Queixa Paciente", "Histórico", "Exame físico", "Problemas", "Alergias",
@@ -33,6 +34,7 @@ export default function Atendimento() {
   const [seconds, setSeconds] = useState(0);
   const [percOpen, setPercOpen] = useState(false);
   const [finalizando, setFinalizando] = useState(false);
+  const [enviarAvaliacao, setEnviarAvaliacao] = useState(true);
 
   useEffect(() => {
     if (pacienteIdRota && pacienteIdRota !== pacienteId) {
@@ -52,6 +54,18 @@ export default function Atendimento() {
     setFinalizando(true);
     try {
       await finalizarAtendimento();
+      if (enviarAvaliacao) {
+        // Best-effort: se o e-mail de avaliação falhar (ex: Resend não
+        // configurado ainda), não impede o profissional de fechar o
+        // atendimento — só avisamos, sem travar a navegação.
+        try {
+          await enviarAvaliacaoPaciente(clinicaId, pacienteId);
+        } catch (err) {
+          // Best-effort: não bloqueia a navegação por causa disso (ex:
+          // Resend ainda não configurado) — só registra no console.
+          console.error("Erro ao enviar avaliação:", err);
+        }
+      }
       navigate("/pacientes");
     } finally {
       setFinalizando(false);
@@ -101,7 +115,11 @@ export default function Atendimento() {
           <div className="p-4 lg:p-5">{renderTab()}</div>
         </div>
       </main>
-      <div className="sticky bottom-0 bg-white border-t border-black/5 px-4 lg:px-6 py-3 flex justify-end gap-2">
+      <div className="sticky bottom-0 bg-white border-t border-black/5 px-4 lg:px-6 py-3 flex items-center justify-end gap-3">
+        <label className="flex items-center gap-1.5 text-xs text-ink-500 mr-auto">
+          <input type="checkbox" checked={enviarAvaliacao} onChange={(e) => setEnviarAvaliacao(e.target.checked)} className="rounded focus-ring" />
+          <Star size={13} /> Enviar avaliação por e-mail ao finalizar
+        </label>
         <button onClick={() => navigate("/pacientes")} className="flex items-center gap-1.5 bg-rose-500 hover:bg-rose-600 text-white text-sm font-semibold px-4 py-2 rounded-lg focus-ring">
           <Trash2 size={15} /> Cancelar
         </button>

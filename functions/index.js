@@ -1,5 +1,5 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { defineSecret } = require("firebase-functions/params");
+const { defineSecret, defineString } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
@@ -29,6 +29,16 @@ const memedSecretKey = defineSecret("MEMED_SECRET_KEY");
 // configuração.
 const whatsappToken = defineSecret("WHATSAPP_TOKEN");
 const whatsappPhoneNumberId = defineSecret("WHATSAPP_PHONE_NUMBER_ID");
+// E-mail de avaliação pós-consulta — via Resend (https://resend.com), API
+// simples, sem precisar de servidor de e-mail próprio. Configurar com:
+//   firebase functions:secrets:set RESEND_API_KEY
+// EMAIL_FROM precisa ser um endereço de um domínio verificado no Resend
+// pra funcionar em produção (o domínio de teste deles só entrega pro
+// próprio e-mail da conta Resend). APP_BASE_URL é opcional — sem
+// configurar, cai no domínio padrão do Firebase Hosting do projeto.
+const resendApiKey = defineSecret("RESEND_API_KEY");
+const emailFromParam = defineString("EMAIL_FROM", { default: "avaliacao@resend.dev" });
+const appBaseUrlParam = defineString("APP_BASE_URL", { default: "" });
 
 const REGION = "southamerica-east1";
 const GROQ_STT_MODEL = "whisper-large-v3-turbo";
@@ -1151,4 +1161,124 @@ exports.convidarMembro = onCall({ region: REGION, timeoutSeconds: 30 }, async (r
   // usuarios/{uid}.clinicaIds e atualiza o custom claim `clinicas`.
 
   return { ok: true, uid, jaExistiaConta };
+});
+
+// ---------------------------------------------------------------------
+// E-mail de avaliação pós-consulta
+// ---------------------------------------------------------------------
+//
+// Envia, via Resend (https://resend.com), um e-mail com um link único pro
+// paciente avaliar a consulta sem precisar de conta/login — o próprio ID do
+// documento criado (aleatório, ~120 bits de entropia) funciona como o
+// token de acesso do link (ver a regra em firestore.rules, avaliacoes/{id}).
+//
+// ⚠️ Precisa de configuração externa antes de funcionar de verdade:
+//   1. Criar conta em resend.com, verificar um domínio de envio.
+//   2. firebase functions:secrets:set RESEND_API_KEY
+//   3. (opcional) firebase functions:config ou .env do projeto de functions
+//      pra customizar EMAIL_FROM / APP_BASE_URL via `firebase deploy` com
+//      --only functions e os params configurados no console, se o domínio
+//      verificado ou o domínio do app não forem os padrões.
+// Sem RESEND_API_KEY configurada, a função retorna um erro claro em vez de
+// fingir que enviou.
+
+function obterBaseUrl() {
+  const configurado = appBaseUrlParam.value();
+  if (configurado) return configurado.replace(/\/$/, "");
+  const projectId = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "";
+  return projectId ? `https://${projectId}.web.app` : "";
+}
+
+function enviarEmailResend({ para, assunto, html }) {
+  const body = JSON.stringify({ from: emailFromParam.value(), to: [para], subject: assunto, html });
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: "api.resend.com",
+        path: "/emails",
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${resendApiKey.value()}`,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+        },
+        timeout: 15000,
+      },
+      (res) => {
+        let corpo = "";
+        res.on("data", (chunk) => (corpo += chunk));
+        res.on("end", () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) resolve(corpo);
+          else reject(new Error(`Resend respondeu ${res.statusCode}: ${corpo}`));
+        });
+      }
+    );
+    req.on("timeout", () => req.destroy(new Error("Tempo esgotado ao chamar a API do Resend.")));
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+/**
+ * Cria a avaliação pendente e dispara o e-mail pro paciente.
+ *
+ * Entrada:  { clinicaId, pacienteId, atendimentoId? }
+ * Saída:    { ok: true, avaliacaoId }
+ */
+exports.enviarAvaliacaoPaciente = onCall({ region: REGION, timeoutSeconds: 30, secrets: [resendApiKey] }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId, pacienteId, atendimentoId } = request.data || {};
+  if (!clinicaId || !pacienteId) throw new HttpsError("invalid-argument", "Dados incompletos.");
+
+  const membroSnap = await db.doc(`clinicas/${clinicaId}/membros/${request.auth.uid}`).get();
+  if (!membroSnap.exists || membroSnap.data().ativo !== true) {
+    throw new HttpsError("permission-denied", "Você precisa ser membro desta clínica.");
+  }
+  if (!resendApiKey.value()) {
+    throw new HttpsError("failed-precondition", "Envio de e-mail de avaliação ainda não configurado neste ambiente (RESEND_API_KEY ausente). Avise o administrador do sistema.");
+  }
+
+  const pacienteSnap = await db.doc(`clinicas/${clinicaId}/pacientes/${pacienteId}`).get();
+  if (!pacienteSnap.exists) throw new HttpsError("not-found", "Paciente não encontrado.");
+  const paciente = pacienteSnap.data();
+  if (!paciente.email) {
+    throw new HttpsError("failed-precondition", "Este paciente não tem e-mail cadastrado.");
+  }
+
+  const clinicaSnap = await db.doc(`clinicas/${clinicaId}`).get();
+  const clinicaNome = clinicaSnap.data()?.nome || "sua clínica";
+
+  const avaliacaoRef = await db.collection(`clinicas/${clinicaId}/avaliacoes`).add({
+    pacienteId,
+    pacienteNome: paciente.nome || null,
+    pacienteEmail: paciente.email,
+    atendimentoId: atendimentoId || null,
+    clinicaNome,
+    enviadoPor: request.auth.uid,
+    status: "pendente",
+    criadoEm: new Date().toISOString(),
+  });
+
+  const link = `${obterBaseUrl()}/avaliar/${clinicaId}/${avaliacaoRef.id}`;
+  const primeiroNome = (paciente.nome || "").split(" ")[0] || "";
+
+  try {
+    await enviarEmailResend({
+      para: paciente.email,
+      assunto: `Como foi sua consulta na ${clinicaNome}?`,
+      html: `
+        <p>Olá, ${primeiroNome}!</p>
+        <p>Sua opinião ajuda a ${clinicaNome} a melhorar o atendimento. Pode avaliar sua consulta recente?</p>
+        <p><a href="${link}" style="display:inline-block;background:#0d9488;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">Avaliar consulta</a></p>
+        <p style="color:#888;font-size:12px">Se o botão não funcionar, copie e cole este link no navegador: ${link}</p>
+      `,
+    });
+  } catch (err) {
+    logger.error("Falha ao enviar e-mail de avaliação via Resend:", err);
+    await avaliacaoRef.delete().catch(() => {});
+    throw new HttpsError("internal", "Não foi possível enviar o e-mail. Verifique a configuração do Resend (domínio verificado, RESEND_API_KEY).");
+  }
+
+  return { ok: true, avaliacaoId: avaliacaoRef.id };
 });

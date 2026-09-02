@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import Topbar from "../components/Topbar";
 import PreferenciasModal from "../components/PreferenciasModal";
 import CertificadoDigitalModal from "../components/CertificadoDigitalModal";
@@ -16,6 +17,7 @@ const cards = [
 ];
 
 export default function Config() {
+  const navigate = useNavigate();
   const [openPref, setOpenPref] = useState(false);
   const [openCert, setOpenCert] = useState(false);
   const [openUsuario, setOpenUsuario] = useState(false);
@@ -26,6 +28,7 @@ export default function Config() {
     if (title === "Certificado Digital") setOpenCert(true);
     if (title === "Editar Usuário") setOpenUsuario(true);
     if (title === "Equipe") setOpenEquipe(true);
+    if (title === "Lista de Tarefas") navigate("/tarefas");
   }
 
   return (

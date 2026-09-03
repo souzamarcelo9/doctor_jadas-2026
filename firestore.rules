@@ -120,6 +120,12 @@ service cloud.firestore {
         allow delete: if souMembro(clinicaId);
       }
 
+      // ---- bloqueios de agenda (Alteração em Bloco: férias, congressos etc) ----
+      match /bloqueiosAgenda/{id} {
+        allow read, create, update: if souMembro(clinicaId);
+        allow delete: if souMembro(clinicaId);
+      }
+
       // ---- tarefas ----
       match /tarefas/{id} {
         allow read, create, update: if souMembro(clinicaId);

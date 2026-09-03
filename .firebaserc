@@ -1,6 +1,7 @@
 {
   "projects": {
-    "doctor-jads": "doctor-jads"
+    "doctor-jads": "doctor-jads",
+    "default": "doctor-jads"
   },
   "targets": {},
   "etags": {}

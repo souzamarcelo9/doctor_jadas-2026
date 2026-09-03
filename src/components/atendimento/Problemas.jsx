@@ -3,6 +3,7 @@ import { Search, ArrowUpDown, MoreVertical, Plus, Loader2 } from "lucide-react";
 import { problemChips } from "../../data/mockData";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreCollection, criarDocumento, alternarAtivo, atualizarDocumento } from "../../lib/firestore";
+import Cid10Picker from "./Cid10Picker";
 
 const grauStyle = {
   LEVE: "badge-leve",
@@ -65,7 +66,10 @@ export default function Problemas() {
       </div>
 
       <div className="card p-3 grid sm:grid-cols-4 gap-2">
-        <input placeholder="CID" value={novo.cid} onChange={(e) => setNovo({ ...novo, cid: e.target.value })} className="text-xs border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
+        <Cid10Picker
+          placeholder="Buscar CID (código ou descrição)…"
+          onSelect={(item) => setNovo((n) => ({ ...n, cid: item.codigo, descricao: n.descricao || item.descricao }))}
+        />
         <input placeholder="Descrição do problema" value={novo.descricao} onChange={(e) => setNovo({ ...novo, descricao: e.target.value })} className="text-xs border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring sm:col-span-2" />
         <select value={novo.grau} onChange={(e) => setNovo({ ...novo, grau: e.target.value })} className="text-xs border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring">
           <option>SEM CLASSIFICAÇÃO</option><option>LEVE</option><option>MODERADA</option><option>SEVERA</option>

@@ -3,7 +3,7 @@ import { Timestamp } from "firebase/firestore";
 import {
   ChevronLeft, ChevronRight, Users, PieChart, XCircle, Clock, Armchair, Lock,
   Stethoscope, UserCheck, CalendarCheck, RefreshCw, Settings2, Loader2,
-  CalendarSearch, Users2, Puzzle,
+  CalendarSearch, Users2, Puzzle, Ban,
 } from "lucide-react";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreDoc, useFirestoreCollection } from "../../lib/firestore";
@@ -12,7 +12,8 @@ import { useNavigate } from "react-router-dom";
 import AgendamentoModal from "./AgendamentoModal";
 import ListaEsperaModal from "./ListaEsperaModal";
 import BuscaHorariosModal from "./BuscaHorariosModal";
-import { diasSemanaChave, gerarSlots, paraISO } from "../../lib/agendaSlots";
+import AlteracaoEmBlocoModal from "./AlteracaoEmBlocoModal";
+import { diasSemanaChave, gerarSlots, periodoDoHorario, paraISO } from "../../lib/agendaSlots";
 
 const situacaoStyle = {
   agendado: { label: "Agendado", rowTone: "bg-blue-50", tag: "bg-blue-100 text-blue-700", icon: CalendarCheck },
@@ -22,6 +23,7 @@ const situacaoStyle = {
   faltou: { label: "Faltou", rowTone: "bg-violet-50/70", tag: "bg-violet-100 text-violet-700", icon: XCircle },
   cancelado: { label: "Cancelado", rowTone: "bg-gray-50", tag: "bg-gray-100 text-gray-500", icon: XCircle },
   livre: { label: "Livre", rowTone: "", tag: "bg-gray-100 text-gray-500", icon: Lock },
+  bloqueado: { label: "Bloqueado", rowTone: "bg-rose-50/60", tag: "bg-rose-100 text-rose-700", icon: Ban },
 };
 
 function hojeISO() {
@@ -36,9 +38,15 @@ export default function AgendaGrid({ onOpenHorarios }) {
   const [modalExtras, setModalExtras] = useState({});
   const [showListaEspera, setShowListaEspera] = useState(false);
   const [showBusca, setShowBusca] = useState(false);
+  const [showBloqueio, setShowBloqueio] = useState(false);
 
   const { data: membro, loading: loadingMembro } = useFirestoreDoc(`clinicas/${clinicaId}/membros`, profissionalId);
   const { data: pacientes } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/pacientes` : null, "nome", "asc");
+  const { data: bloqueios } = useFirestoreQuery(
+    clinicaId ? `clinicas/${clinicaId}/bloqueiosAgenda` : null,
+    [where("profissionalId", "==", profissionalId)],
+    [profissionalId]
+  );
 
   const [inicioDia, fimDia] = useMemo(() => {
     const d = new Date(`${dateISO}T00:00:00`);
@@ -57,6 +65,11 @@ export default function AgendaGrid({ onOpenHorarios }) {
   const horarioDoDia = membro?.horariosTrabalho?.find((h) => h.dia === diaSemana);
   const slots = useMemo(() => gerarSlots(horarioDoDia), [horarioDoDia]);
 
+  const bloqueiosHoje = useMemo(
+    () => bloqueios.filter((b) => dateISO >= b.dataInicial && dateISO <= b.dataFinal && (b.diasSemana || []).includes(diaSemana)),
+    [bloqueios, dateISO, diaSemana]
+  );
+
   const linhas = useMemo(() => {
     const porHora = slots.map((hora) => {
       const ag = agendamentos.find((a) => {
@@ -64,7 +77,8 @@ export default function AgendaGrid({ onOpenHorarios }) {
         if (!d) return false;
         return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` === hora;
       });
-      return { hora, agendamento: ag };
+      const bloqueio = !ag ? bloqueiosHoje.find((b) => (b.periodos || []).includes(periodoDoHorario(hora))) : null;
+      return { hora, agendamento: ag, bloqueio };
     });
     // Encaixes: agendamentos cujo horário não bate com nenhum slot padrão do
     // dia (ex: marcado às 09:15 num grid de 30 em 30 min) — mesclados aqui
@@ -81,7 +95,7 @@ export default function AgendaGrid({ onOpenHorarios }) {
         return { hora: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`, agendamento: a };
       });
     return [...porHora, ...encaixes].sort((a, b) => a.hora.localeCompare(b.hora));
-  }, [slots, agendamentos]);
+  }, [slots, agendamentos, bloqueiosHoje]);
 
   const ocupados = linhas.filter((l) => l.agendamento).length;
   const faltas = agendamentos.filter((a) => a.status === "faltou").length;
@@ -149,6 +163,9 @@ export default function AgendaGrid({ onOpenHorarios }) {
         <button onClick={() => setShowBusca(true)} className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-700 bg-white hover:bg-gray-50 border border-black/10 px-3 py-1.5 rounded-lg focus-ring">
           <CalendarSearch size={13} /> Localizar horários
         </button>
+        <button onClick={() => setShowBloqueio(true)} className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-700 bg-white hover:bg-gray-50 border border-black/10 px-3 py-1.5 rounded-lg focus-ring">
+          <Ban size={13} /> Alteração em Bloco
+        </button>
 
         <div className="flex-1" />
         <button onClick={() => window.location.reload()} className="flex items-center gap-1.5 text-[11px] font-semibold text-brand-700 bg-brand-50 hover:bg-brand-100 border border-brand-100 px-3 py-1.5 rounded-lg focus-ring">
@@ -173,13 +190,20 @@ export default function AgendaGrid({ onOpenHorarios }) {
               </tr>
             </thead>
             <tbody>
-              {linhas.map(({ hora, agendamento }) => {
-                const s = situacaoStyle[agendamento?.status || "livre"];
+              {linhas.map(({ hora, agendamento, bloqueio }) => {
+                const s = situacaoStyle[agendamento?.status || (bloqueio ? "bloqueado" : "livre")];
                 const Icon = s.icon;
                 return (
-                  <tr key={hora} onClick={() => { setModalExtras({}); setModalSlot({ hora, agendamento }); }} className={`border-t border-black/5 ${s.rowTone} hover:bg-brand-50/50 cursor-pointer transition-colors`}>
+                  <tr
+                    key={hora}
+                    onClick={() => {
+                      if (bloqueio) { setShowBloqueio(true); return; }
+                      setModalExtras({}); setModalSlot({ hora, agendamento });
+                    }}
+                    className={`border-t border-black/5 ${s.rowTone} hover:bg-brand-50/50 cursor-pointer transition-colors`}
+                  >
                     <Td className="font-semibold text-brand-700 whitespace-nowrap">{hora}</Td>
-                    <Td className="font-medium text-ink-900">{agendamento?.pacienteNome || ""}</Td>
+                    <Td className="font-medium text-ink-900">{agendamento?.pacienteNome || (bloqueio ? (bloqueio.motivo || "Horário bloqueado") : "")}</Td>
                     <Td>{agendamento?.convenioNome || ""}</Td>
                     <Td>{agendamento?.tipoAtendimento || ""} {agendamento?.encaixe && <span className="ml-1 text-[9px] font-semibold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded-full align-middle">Encaixe</span>}</Td>
                     <Td>
@@ -235,6 +259,16 @@ export default function AgendaGrid({ onOpenHorarios }) {
             setShowBusca(false);
             abrirNovoAgendamento({ data, hora });
           }}
+        />
+      )}
+
+      {showBloqueio && (
+        <AlteracaoEmBlocoModal
+          clinicaId={clinicaId}
+          profissionalId={profissionalId}
+          nomeMedico={membro?.nome || ""}
+          abaInicial={bloqueios.length > 0 ? "ativos" : "bloquear"}
+          onClose={() => setShowBloqueio(false)}
         />
       )}
     </div>

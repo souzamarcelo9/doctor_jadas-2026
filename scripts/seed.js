@@ -57,12 +57,18 @@ async function seed() {
   console.log(`Custom claim definido: clinicas=[${CLINICA_ID}]`);
 
   // ---------- usuarios/{uid} ----------
+  // O campo precisa se chamar exatamente `clinicaIds` — é esse nome que o
+  // gatilho onMembroEscrito (functions/index.js) lê pra manter o custom
+  // claim sincronizado. Se este script rodar de novo no futuro, a escrita
+  // em clinicas/{id}/membros/{uid} logo abaixo dispara esse gatilho de
+  // novo — com o nome errado aqui, ele reconstruiria o claim como uma
+  // lista vazia e derrubaria o acesso deste usuário.
   await db.doc(`usuarios/${uid}`).set({
     nome: "Jessica Gabriela Diniz",
     email: PROFISSIONAL_EMAIL,
     telefone: "(11) 90000-0000",
     criadoEm: agora,
-    clinicasVinculadas: [CLINICA_ID],
+    clinicaIds: [CLINICA_ID],
   });
 
   // ---------- clinicas/{clinicaId} ----------

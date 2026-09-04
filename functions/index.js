@@ -1282,3 +1282,56 @@ exports.enviarAvaliacaoPaciente = onCall({ region: REGION, timeoutSeconds: 30, s
 
   return { ok: true, avaliacaoId: avaliacaoRef.id };
 });
+
+// ---------------------------------------------------------------------
+// Correção pontual: recalcular usuarios/{uid}.clinicaIds + custom claims
+// de TODOS os usuários, direto da fonte de verdade (membros/{uid}.ativo)
+// ---------------------------------------------------------------------
+//
+// Motivo de existir: o `scripts/seed.js` gravava esse índice num campo
+// chamado `clinicasVinculadas`, mas o gatilho onMembroEscrito (acima) lê
+// `clinicaIds` — nomes diferentes. Resultado: sempre que o seed rodava de
+// novo depois que esse gatilho passou a existir, ele recalculava o índice
+// a partir de um campo vazio e apagava o custom claim de quem já tinha
+// acesso. O script já foi corrigido, mas isso não conserta quem já foi
+// afetado — daí esta função, que recalcula tudo do zero a partir da
+// fonte de verdade real (os documentos em `membros`, não o índice
+// espelhado), então não importa o que estava errado antes.
+//
+// Não exige papel admin de propósito: ela só RECALCULA o que já é
+// verdade no Firestore (não concede acesso novo a ninguém, só corrige o
+// espelho/claim pra bater com o que os vínculos em `membros` já dizem),
+// então não há escalação de privilégio possível em chamar isso. Pode
+// rodar quantas vezes quiser, é idempotente.
+//
+// Chamar uma vez agora pra corrigir o ambiente atual: pelo emulador,
+// pela aba "Testing" de Cloud Functions no Console, ou temporariamente
+// por um botão/console do app — não expus isso na UI porque é uma
+// operação de manutenção pontual, não uma feature do produto.
+exports.recalcularTodosOsClaims = onCall({ region: REGION, timeoutSeconds: 120 }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+
+  const clinicasSnap = await db.collection("clinicas").get();
+  const clinicasPorUid = new Map(); // uid -> string[] clinicaIds
+
+  for (const clinicaDoc of clinicasSnap.docs) {
+    const membrosSnap = await db.collection(`clinicas/${clinicaDoc.id}/membros`).get();
+    for (const membroDoc of membrosSnap.docs) {
+      if (membroDoc.data().ativo !== true) continue;
+      const uid = membroDoc.id;
+      const lista = clinicasPorUid.get(uid) || [];
+      lista.push(clinicaDoc.id);
+      clinicasPorUid.set(uid, lista);
+    }
+  }
+
+  const authAdmin = getAuth();
+  let usuariosAtualizados = 0;
+  for (const [uid, clinicaIds] of clinicasPorUid.entries()) {
+    await db.doc(`usuarios/${uid}`).set({ clinicaIds }, { merge: true });
+    await authAdmin.setCustomUserClaims(uid, { clinicas: clinicaIds });
+    usuariosAtualizados += 1;
+  }
+
+  return { ok: true, usuariosAtualizados };
+});

@@ -126,6 +126,12 @@ service cloud.firestore {
         allow delete: if souMembro(clinicaId);
       }
 
+      // ---- feedback rápido (botão de joinha na Topbar) ----
+      match /feedback/{id} {
+        allow create: if souMembro(clinicaId);
+        allow read, delete: if souAdmin(clinicaId);
+      }
+
       // ---- tarefas ----
       match /tarefas/{id} {
         allow read, create, update: if souMembro(clinicaId);

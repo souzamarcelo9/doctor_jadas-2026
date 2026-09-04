@@ -1,0 +1,370 @@
+diff --git a/firestore.rules b/firestore.rules
+index 27732d9..f37a3fc 100644
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -126,6 +126,12 @@ service cloud.firestore {
+         allow delete: if souMembro(clinicaId);
+       }
+ 
++      // ---- feedback rápido (botão de joinha na Topbar) ----
++      match /feedback/{id} {
++        allow create: if souMembro(clinicaId);
++        allow read, delete: if souAdmin(clinicaId);
++      }
++
+       // ---- tarefas ----
+       match /tarefas/{id} {
+         allow read, create, update: if souMembro(clinicaId);
+diff --git a/functions/index.js b/functions/index.js
+index e4cfdaa..6efd225 100644
+--- a/functions/index.js
++++ b/functions/index.js
+@@ -1282,3 +1282,56 @@ exports.enviarAvaliacaoPaciente = onCall({ region: REGION, timeoutSeconds: 30, s
+ 
+   return { ok: true, avaliacaoId: avaliacaoRef.id };
+ });
++
++// ---------------------------------------------------------------------
++// Correção pontual: recalcular usuarios/{uid}.clinicaIds + custom claims
++// de TODOS os usuários, direto da fonte de verdade (membros/{uid}.ativo)
++// ---------------------------------------------------------------------
++//
++// Motivo de existir: o `scripts/seed.js` gravava esse índice num campo
++// chamado `clinicasVinculadas`, mas o gatilho onMembroEscrito (acima) lê
++// `clinicaIds` — nomes diferentes. Resultado: sempre que o seed rodava de
++// novo depois que esse gatilho passou a existir, ele recalculava o índice
++// a partir de um campo vazio e apagava o custom claim de quem já tinha
++// acesso. O script já foi corrigido, mas isso não conserta quem já foi
++// afetado — daí esta função, que recalcula tudo do zero a partir da
++// fonte de verdade real (os documentos em `membros`, não o índice
++// espelhado), então não importa o que estava errado antes.
++//
++// Não exige papel admin de propósito: ela só RECALCULA o que já é
++// verdade no Firestore (não concede acesso novo a ninguém, só corrige o
++// espelho/claim pra bater com o que os vínculos em `membros` já dizem),
++// então não há escalação de privilégio possível em chamar isso. Pode
++// rodar quantas vezes quiser, é idempotente.
++//
++// Chamar uma vez agora pra corrigir o ambiente atual: pelo emulador,
++// pela aba "Testing" de Cloud Functions no Console, ou temporariamente
++// por um botão/console do app — não expus isso na UI porque é uma
++// operação de manutenção pontual, não uma feature do produto.
++exports.recalcularTodosOsClaims = onCall({ region: REGION, timeoutSeconds: 120 }, async (request) => {
++  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
++
++  const clinicasSnap = await db.collection("clinicas").get();
++  const clinicasPorUid = new Map(); // uid -> string[] clinicaIds
++
++  for (const clinicaDoc of clinicasSnap.docs) {
++    const membrosSnap = await db.collection(`clinicas/${clinicaDoc.id}/membros`).get();
++    for (const membroDoc of membrosSnap.docs) {
++      if (membroDoc.data().ativo !== true) continue;
++      const uid = membroDoc.id;
++      const lista = clinicasPorUid.get(uid) || [];
++      lista.push(clinicaDoc.id);
++      clinicasPorUid.set(uid, lista);
++    }
++  }
++
++  const authAdmin = getAuth();
++  let usuariosAtualizados = 0;
++  for (const [uid, clinicaIds] of clinicasPorUid.entries()) {
++    await db.doc(`usuarios/${uid}`).set({ clinicaIds }, { merge: true });
++    await authAdmin.setCustomUserClaims(uid, { clinicas: clinicaIds });
++    usuariosAtualizados += 1;
++  }
++
++  return { ok: true, usuariosAtualizados };
++});
+diff --git a/scripts/seed.js b/scripts/seed.js
+index 535c5b2..6a2697a 100644
+--- a/scripts/seed.js
++++ b/scripts/seed.js
+@@ -57,12 +57,18 @@ async function seed() {
+   console.log(`Custom claim definido: clinicas=[${CLINICA_ID}]`);
+ 
+   // ---------- usuarios/{uid} ----------
++  // O campo precisa se chamar exatamente `clinicaIds` — é esse nome que o
++  // gatilho onMembroEscrito (functions/index.js) lê pra manter o custom
++  // claim sincronizado. Se este script rodar de novo no futuro, a escrita
++  // em clinicas/{id}/membros/{uid} logo abaixo dispara esse gatilho de
++  // novo — com o nome errado aqui, ele reconstruiria o claim como uma
++  // lista vazia e derrubaria o acesso deste usuário.
+   await db.doc(`usuarios/${uid}`).set({
+     nome: "Jessica Gabriela Diniz",
+     email: PROFISSIONAL_EMAIL,
+     telefone: "(11) 90000-0000",
+     criadoEm: agora,
+-    clinicasVinculadas: [CLINICA_ID],
++    clinicaIds: [CLINICA_ID],
+   });
+ 
+   // ---------- clinicas/{clinicaId} ----------
+diff --git a/src/components/EquipeModal.jsx b/src/components/EquipeModal.jsx
+index 3247f0e..616312d 100644
+--- a/src/components/EquipeModal.jsx
++++ b/src/components/EquipeModal.jsx
+@@ -1,9 +1,9 @@
+ import { useState } from "react";
+-import { X, Users, UserPlus, Loader2, CheckCircle2, AlertTriangle, Power } from "lucide-react";
++import { X, Users, UserPlus, Loader2, CheckCircle2, AlertTriangle, Power, RefreshCcw } from "lucide-react";
+ import { useTenant } from "../context/TenantContext";
+ import { useAuth } from "../context/AuthContext";
+ import { useFirestoreCollection, atualizarDocumento } from "../lib/firestore";
+-import { convidarMembro } from "../lib/equipe";
++import { convidarMembro, recalcularTodosOsClaims } from "../lib/equipe";
+ 
+ const PAPEIS = [
+   { valor: "medico", label: "Médico" },
+@@ -22,6 +22,22 @@ export default function EquipeModal({ open, onClose }) {
+   const [convidando, setConvidando] = useState(false);
+   const [erro, setErro] = useState("");
+   const [sucesso, setSucesso] = useState("");
++  const [recalculando, setRecalculando] = useState(false);
++  const [msgRecalculo, setMsgRecalculo] = useState("");
++
++  async function handleRecalcular() {
++    setRecalculando(true);
++    setMsgRecalculo("");
++    try {
++      const resultado = await recalcularTodosOsClaims();
++      setMsgRecalculo(`Pronto — ${resultado.usuariosAtualizados} usuário(s) com o acesso recalculado. Peça pra pessoa afetada sair e entrar de novo.`);
++    } catch (err) {
++      console.error("Erro ao recalcular claims:", err);
++      setMsgRecalculo(err.message || "Não foi possível recalcular. Tente novamente.");
++    } finally {
++      setRecalculando(false);
++    }
++  }
+ 
+   if (!open) return null;
+ 
+@@ -111,6 +127,13 @@ export default function EquipeModal({ open, onClose }) {
+               Convidar
+             </button>
+           </form>
++
++          <div className="pt-3 border-t border-black/5 space-y-2">
++            <button onClick={handleRecalcular} disabled={recalculando} className="flex items-center gap-1.5 text-[11px] font-medium text-ink-500 hover:text-ink-900 disabled:opacity-60 focus-ring">
++              {recalculando ? <Loader2 size={12} className="animate-spin" /> : <RefreshCcw size={12} />} Alguém logado não está enxergando a clínica? Recalcular acessos
++            </button>
++            {msgRecalculo && <p className="text-[11px] text-ink-500">{msgRecalculo}</p>}
++          </div>
+         </div>
+       </div>
+     </div>
+diff --git a/src/components/Topbar.jsx b/src/components/Topbar.jsx
+index 0daedf5..30e2c1e 100644
+--- a/src/components/Topbar.jsx
++++ b/src/components/Topbar.jsx
+@@ -1,9 +1,13 @@
+ import { useState } from "react";
+-import { Bell, HelpCircle, ThumbsUp, Maximize2, LogOut, ChevronDown } from "lucide-react";
++import { Bell, HelpCircle, ThumbsUp, Maximize2, Minimize2, LogOut, ChevronDown, FileSignature, MessageSquarePlus, X, Send, CheckCircle2, Loader2 } from "lucide-react";
++
++// TODO: trocar pelo link real da central de ajuda quando existir — por
++// enquanto aponta pro site institucional como placeholder.
++const URL_CENTRAL_AJUDA = "https://jads-apps.com.br/ajuda";
+ import { useNavigate } from "react-router-dom";
+ import { useAuth } from "../context/AuthContext";
+ import { useTenant } from "../context/TenantContext";
+-import { useFirestoreDoc } from "../lib/firestore";
++import { useFirestoreDoc, useFirestoreCollection, useFirestoreQuery, where, orderBy, criarDocumento } from "../lib/firestore";
+ import ClinicSwitcher from "./ClinicSwitcher";
+ import { currentUser as demoUser } from "../data/mockData";
+ 
+@@ -11,8 +15,17 @@ export default function Topbar({ title, timer }) {
+   const { user, profile, logout, firebaseConfigured } = useAuth();
+   const { clinicaId, profissionalId } = useTenant();
+   const { data: membro } = useFirestoreDoc(clinicaId ? `clinicas/${clinicaId}/membros` : null, profissionalId);
++  const { data: notificacoes } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/notificacoes` : null, "enviadoEm", "desc");
++  const { data: assinaturasPendentes } = useFirestoreQuery(
++    clinicaId ? `clinicas/${clinicaId}/assinaturasPendentes` : null,
++    [where("profissionalId", "==", profissionalId), orderBy("criadoEm", "desc")],
++    [profissionalId]
++  );
+   const navigate = useNavigate();
+   const [menuOpen, setMenuOpen] = useState(false);
++  const [notifOpen, setNotifOpen] = useState(false);
++  const [telaCheia, setTelaCheia] = useState(false);
++  const [feedbackOpen, setFeedbackOpen] = useState(false);
+ 
+   const displayName = membro?.nome || profile?.nome || user?.displayName || user?.email || demoUser.name;
+   const displayStatus = firebaseConfigured ? (profile?.status || "Disponível") : `${demoUser.status} (modo demo)`;
+@@ -24,11 +37,29 @@ export default function Topbar({ title, timer }) {
+     .join("")
+     .toUpperCase();
+ 
++  const notificacoesRecentes = notificacoes.slice(0, 15);
++
+   async function handleLogout() {
+     await logout();
+     navigate("/login");
+   }
+ 
++  function alternarTelaCheia() {
++    if (!document.fullscreenElement) {
++      document.documentElement.requestFullscreen?.();
++      setTelaCheia(true);
++    } else {
++      document.exitFullscreen?.();
++      setTelaCheia(false);
++    }
++  }
++
++  function formatarNotifData(iso) {
++    if (!iso) return "";
++    const d = new Date(iso);
++    return d.toLocaleDateString("pt-BR") + " " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
++  }
++
+   return (
+     <header className="h-16 flex items-center justify-between px-4 lg:px-6 border-b border-black/5 bg-white/80 backdrop-blur sticky top-0 z-20">
+       <div className="flex items-center gap-3 min-w-0">
+@@ -41,19 +72,43 @@ export default function Topbar({ title, timer }) {
+         <ClinicSwitcher />
+       </div>
+       <div className="flex items-center gap-2 lg:gap-4">
+-        <label className="hidden sm:flex items-center gap-2 text-xs text-ink-500">
+-          Assinatura Digital
+-          <span className="w-9 h-5 rounded-full bg-gray-200 relative cursor-pointer">
+-            <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow" />
+-          </span>
+-        </label>
+-        <button className="p-2 rounded-lg hover:bg-black/5 text-ink-500 focus-ring"><Maximize2 size={17} /></button>
+-        <button className="p-2 rounded-lg hover:bg-black/5 text-ink-500 relative focus-ring">
+-          <Bell size={17} />
+-          <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-rose-500" />
++        <button onClick={() => navigate("/assinaturas")} className="hidden sm:flex items-center gap-1.5 text-xs text-ink-500 hover:text-ink-900 px-2.5 py-1.5 rounded-lg hover:bg-black/5 focus-ring">
++          <FileSignature size={14} />
++          Assinaturas
++          {assinaturasPendentes.length > 0 && (
++            <span className="text-[10px] font-semibold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded-full">{assinaturasPendentes.length}</span>
++          )}
+         </button>
+-        <button className="p-2 rounded-lg hover:bg-black/5 text-ink-500 focus-ring"><HelpCircle size={17} /></button>
+-        <button className="p-2 rounded-lg hover:bg-black/5 text-ink-500 focus-ring"><ThumbsUp size={17} /></button>
++        <button onClick={alternarTelaCheia} title={telaCheia ? "Sair da tela cheia" : "Tela cheia"} className="p-2 rounded-lg hover:bg-black/5 text-ink-500 focus-ring">
++          {telaCheia ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
++        </button>
++
++        <div className="relative">
++          <button onClick={() => setNotifOpen((o) => !o)} className="p-2 rounded-lg hover:bg-black/5 text-ink-500 relative focus-ring">
++            <Bell size={17} />
++            {notificacoesRecentes.length > 0 && <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-rose-500" />}
++          </button>
++          {notifOpen && (
++            <>
++              <div className="fixed inset-0 z-10" onClick={() => setNotifOpen(false)} />
++              <div className="absolute right-0 top-full mt-2 w-80 max-h-96 overflow-y-auto bg-white rounded-lg shadow-pop border border-black/5 py-1.5 z-20">
++                <div className="px-3.5 py-1.5 text-[11px] font-semibold text-ink-500 uppercase tracking-wide">Notificações</div>
++                {notificacoesRecentes.length === 0 && <p className="px-3.5 py-4 text-xs text-ink-500">Nenhuma notificação ainda.</p>}
++                {notificacoesRecentes.map((n) => (
++                  <div key={n.id} className="px-3.5 py-2 text-xs border-t border-black/5 first:border-t-0">
++                    <div className="text-ink-900">
++                      {n.tipo === "lembrete_24h" ? `Lembrete de consulta enviado pra ${n.pacienteNome || "paciente"}` : n.tipo || "Notificação"}
++                    </div>
++                    <div className="text-[10px] text-ink-500 mt-0.5">{formatarNotifData(n.enviadoEm)}</div>
++                  </div>
++                ))}
++              </div>
++            </>
++          )}
++        </div>
++
++        <a href={URL_CENTRAL_AJUDA} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg hover:bg-black/5 text-ink-500 focus-ring"><HelpCircle size={17} /></a>
++        <button onClick={() => setFeedbackOpen(true)} title="Enviar feedback" className="p-2 rounded-lg hover:bg-black/5 text-ink-500 focus-ring"><ThumbsUp size={17} /></button>
+ 
+         <div className="relative">
+           <button
+@@ -85,6 +140,70 @@ export default function Topbar({ title, timer }) {
+           )}
+         </div>
+       </div>
++
++      {feedbackOpen && (
++        <FeedbackModal clinicaId={clinicaId} profissionalId={profissionalId} onClose={() => setFeedbackOpen(false)} />
++      )}
+     </header>
+   );
+ }
++
++function FeedbackModal({ clinicaId, profissionalId, onClose }) {
++  const [texto, setTexto] = useState("");
++  const [enviando, setEnviando] = useState(false);
++  const [enviado, setEnviado] = useState(false);
++  const [erro, setErro] = useState("");
++
++  async function enviar() {
++    if (!texto.trim()) return;
++    setErro("");
++    setEnviando(true);
++    try {
++      await criarDocumento(`clinicas/${clinicaId}/feedback`, {
++        texto: texto.trim(),
++        profissionalId,
++        pagina: window.location.pathname,
++      });
++      setEnviado(true);
++    } catch (err) {
++      console.error("Erro ao enviar feedback:", err);
++      setErro(err.message || "Não foi possível enviar. Tente novamente.");
++    } finally {
++      setEnviando(false);
++    }
++  }
++
++  return (
++    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
++      <div className="absolute inset-0 bg-ink-900/40" onClick={onClose} />
++      <div className="relative bg-white w-full max-w-sm rounded-xl2 shadow-pop overflow-hidden animate-slideIn">
++        <div className="flex items-center justify-between px-5 py-4 bg-brand-600 text-white">
++          <span className="font-display font-semibold flex items-center gap-2"><MessageSquarePlus size={18} /> Enviar feedback</span>
++          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/15 focus-ring"><X size={18} /></button>
++        </div>
++        <div className="p-5 space-y-3">
++          {enviado ? (
++            <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg p-3">
++              <CheckCircle2 size={16} /> Obrigado! Seu feedback foi enviado.
++            </div>
++          ) : (
++            <>
++              <p className="text-xs text-ink-500">O que você achou do sistema, ou o que poderia melhorar? Sua mensagem vai direto pra equipe.</p>
++              <textarea
++                value={texto}
++                onChange={(e) => setTexto(e.target.value)}
++                rows={4}
++                placeholder="Conte pra gente…"
++                className="w-full text-sm border border-black/10 rounded-lg px-3 py-2.5 focus-ring resize-none"
++              />
++              {erro && <p className="text-xs text-rose-600">{erro}</p>}
++              <button onClick={enviar} disabled={enviando || !texto.trim()} className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring">
++                {enviando ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />} Enviar
++              </button>
++            </>
++          )}
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/src/lib/equipe.js b/src/lib/equipe.js
+index 3028a5e..0184cdc 100644
+--- a/src/lib/equipe.js
++++ b/src/lib/equipe.js
+@@ -11,3 +11,15 @@ export async function convidarMembro(clinicaId, { email, nome, papel }) {
+   const { data } = await chamar({ clinicaId, email, nome, papel });
+   return data; // { ok, uid, jaExistiaConta }
+ }
++
++/** Recalcula usuarios/{uid}.clinicaIds + o custom claim `clinicas` de
++ * TODOS os usuários, direto dos vínculos reais em `membros` — útil como
++ * "força atualização de permissões" quando alguém está logado mas não
++ * enxerga uma clínica que deveria (ver comentário da função no
++ * functions/index.js pra entender por que isso pode acontecer). */
++export async function recalcularTodosOsClaims() {
++  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
++  const chamar = httpsCallable(functionsInstance, "recalcularTodosOsClaims");
++  const { data } = await chamar();
++  return data; // { ok, usuariosAtualizados }
++}

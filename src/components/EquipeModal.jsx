@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { X, Users, UserPlus, Loader2, CheckCircle2, AlertTriangle, Power } from "lucide-react";
+import { X, Users, UserPlus, Loader2, CheckCircle2, AlertTriangle, Power, RefreshCcw } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
 import { useAuth } from "../context/AuthContext";
 import { useFirestoreCollection, atualizarDocumento } from "../lib/firestore";
-import { convidarMembro } from "../lib/equipe";
+import { convidarMembro, recalcularTodosOsClaims } from "../lib/equipe";
 
 const PAPEIS = [
   { valor: "medico", label: "Médico" },
@@ -22,6 +22,22 @@ export default function EquipeModal({ open, onClose }) {
   const [convidando, setConvidando] = useState(false);
   const [erro, setErro] = useState("");
   const [sucesso, setSucesso] = useState("");
+  const [recalculando, setRecalculando] = useState(false);
+  const [msgRecalculo, setMsgRecalculo] = useState("");
+
+  async function handleRecalcular() {
+    setRecalculando(true);
+    setMsgRecalculo("");
+    try {
+      const resultado = await recalcularTodosOsClaims();
+      setMsgRecalculo(`Pronto — ${resultado.usuariosAtualizados} usuário(s) com o acesso recalculado. Peça pra pessoa afetada sair e entrar de novo.`);
+    } catch (err) {
+      console.error("Erro ao recalcular claims:", err);
+      setMsgRecalculo(err.message || "Não foi possível recalcular. Tente novamente.");
+    } finally {
+      setRecalculando(false);
+    }
+  }
 
   if (!open) return null;
 
@@ -111,6 +127,13 @@ export default function EquipeModal({ open, onClose }) {
               Convidar
             </button>
           </form>
+
+          <div className="pt-3 border-t border-black/5 space-y-2">
+            <button onClick={handleRecalcular} disabled={recalculando} className="flex items-center gap-1.5 text-[11px] font-medium text-ink-500 hover:text-ink-900 disabled:opacity-60 focus-ring">
+              {recalculando ? <Loader2 size={12} className="animate-spin" /> : <RefreshCcw size={12} />} Alguém logado não está enxergando a clínica? Recalcular acessos
+            </button>
+            {msgRecalculo && <p className="text-[11px] text-ink-500">{msgRecalculo}</p>}
+          </div>
         </div>
       </div>
     </div>

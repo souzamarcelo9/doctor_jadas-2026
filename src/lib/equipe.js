@@ -11,3 +11,15 @@ export async function convidarMembro(clinicaId, { email, nome, papel }) {
   const { data } = await chamar({ clinicaId, email, nome, papel });
   return data; // { ok, uid, jaExistiaConta }
 }
+
+/** Recalcula usuarios/{uid}.clinicaIds + o custom claim `clinicas` de
+ * TODOS os usuários, direto dos vínculos reais em `membros` — útil como
+ * "força atualização de permissões" quando alguém está logado mas não
+ * enxerga uma clínica que deveria (ver comentário da função no
+ * functions/index.js pra entender por que isso pode acontecer). */
+export async function recalcularTodosOsClaims() {
+  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
+  const chamar = httpsCallable(functionsInstance, "recalcularTodosOsClaims");
+  const { data } = await chamar();
+  return data; // { ok, usuariosAtualizados }
+}

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import Topbar from "../components/Topbar";
-import { Receipt, PlugZap, Send, Clock3, CheckCircle2, AlertTriangle, Loader2, XCircle } from "lucide-react";
+import { Receipt, PlugZap, Send, Clock3, CheckCircle2, AlertTriangle, Loader2, XCircle, Link2 } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
-import { useFirestoreDoc, useFirestoreCollection, criarDocumento } from "../lib/firestore";
+import { useFirestoreDoc, useFirestoreCollection, criarDocumento, atualizarDocumento } from "../lib/firestore";
 import { nfseEmitir } from "../lib/nfse";
 
 const statusTone = {
@@ -16,9 +16,21 @@ export default function NotasFiscais() {
   const { clinicaId, firebaseConfigured } = useTenant();
   const { data: clinica } = useFirestoreDoc("clinicas", clinicaId);
   const { data: historico, loading } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/notasFiscais` : null);
+  const { data: contasReceber } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/contasReceber` : null);
   const [issuing, setIssuing] = useState(false);
   const [resultado, setResultado] = useState(null);
+  const [contaVinculadaId, setContaVinculadaId] = useState("");
   const [form, setForm] = useState({ tomador: "", cpfCnpj: "", codigoServico: "04498", valor: "", aliquota: "0.02", discriminacao: "Consulta médica" });
+
+  const contasDisponiveis = contasReceber.filter((c) => c.status === "pendente" && !c.notaFiscalId);
+
+  function vincularConta(id) {
+    setContaVinculadaId(id);
+    const conta = contasReceber.find((c) => c.id === id);
+    if (conta) {
+      setForm((f) => ({ ...f, tomador: conta.pacienteNome || f.tomador, valor: String(conta.valor ?? f.valor), discriminacao: conta.descricao || f.discriminacao }));
+    }
+  }
 
   const certConfigurado = clinica?.certificadoNfse?.status === "configurado";
 
@@ -45,7 +57,29 @@ export default function NotasFiscais() {
         discriminacao: form.discriminacao,
       });
       setResultado(resposta);
+
+      // Alimenta o financeiro só quando a emissão de fato saiu (RPS montado
+      // e enviado) — nunca duplica: se a nota foi emitida em cima de uma
+      // conta a receber que já existia (ex: gerada pelo agendamento), só
+      // vinculamos essa conta à nota; senão, criamos uma nova.
+      if (resposta.status === "enviado_teste") {
+        if (contaVinculadaId) {
+          await atualizarDocumento(`clinicas/${clinicaId}/contasReceber`, contaVinculadaId, { notaFiscalId: notaRef.id });
+        } else {
+          await criarDocumento(`clinicas/${clinicaId}/contasReceber`, {
+            descricao: form.discriminacao || "Nota fiscal avulsa",
+            valor: Number(form.valor),
+            vencimento: new Date().toISOString().slice(0, 10),
+            status: "pendente",
+            pacienteNome: form.tomador,
+            origem: "nfse",
+            notaFiscalId: notaRef.id,
+          });
+        }
+      }
+
       setForm({ tomador: "", cpfCnpj: "", codigoServico: "04498", valor: "", aliquota: "0.02", discriminacao: "Consulta médica" });
+      setContaVinculadaId("");
     } catch (err) {
       console.error("Erro ao emitir NFS-e:", err);
       setResultado({ status: "erro", detalhe: err.message || "Falha ao emitir." });
@@ -81,6 +115,20 @@ export default function NotasFiscais() {
               <Receipt size={16} className="text-brand-600" />
               <span className="text-sm font-display font-semibold text-ink-900">Emitir NFS-e (teste)</span>
             </div>
+
+            {contasDisponiveis.length > 0 && (
+              <label className="block text-xs">
+                <span className="text-ink-500 font-medium flex items-center gap-1"><Link2 size={12} /> Vincular a uma conta a receber existente (opcional)</span>
+                <select value={contaVinculadaId} onChange={(e) => vincularConta(e.target.value)} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring">
+                  <option value="">Nota avulsa (cria uma conta nova)</option>
+                  {contasDisponiveis.map((c) => (
+                    <option key={c.id} value={c.id}>{c.descricao} — {(c.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</option>
+                  ))}
+                </select>
+                <span className="text-[11px] text-ink-500">Selecionar aqui evita lançar a mesma receita duas vezes no financeiro.</span>
+              </label>
+            )}
+
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="Tomador do serviço" value={form.tomador} onChange={(v) => setForm({ ...form, tomador: v })} />
               <Field label="CPF/CNPJ" value={form.cpfCnpj} onChange={(v) => setForm({ ...form, cpfCnpj: v })} />

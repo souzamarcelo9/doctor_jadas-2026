@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "seed": "node scripts/seed.js",
-    "criar-admin": "node scripts/criarAdmin.js"
+    "criar-admin": "node scripts/criarAdmin.js",
+    "seed-formularios": "node scripts/seedFormularios.js"
   },
   "dependencies": {
     "firebase": "^12.16.0",

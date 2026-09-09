@@ -58,6 +58,7 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
   const [cidades, setCidades] = useState([]);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
+  const [confirmouSemCobranca, setConfirmouSemCobranca] = useState(false);
 
   const [agendaForm, setAgendaForm] = useState(() => ({
     data: dateISO,
@@ -158,6 +159,11 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
     if (!novoPaciente && !pacienteSel) { setErro("Selecione um paciente existente ou marque \"Novo Paciente\"."); return; }
     if (!form.nome.trim()) { setErro("Informe o nome do paciente."); return; }
     if (!agendaForm.data || !agendaForm.hora) { setErro("Informe data e hora do agendamento."); return; }
+    const semCobranca = !agendaForm.servicoId && (!Number(agendaForm.valor) || Number(agendaForm.valor) <= 0);
+    if (semCobranca && !confirmouSemCobranca) {
+      setErro("Nenhum serviço/valor foi vinculado — isso significa que NADA será lançado no financeiro. Se for intencional (ex: consulta de cortesia), marque a confirmação abaixo do campo de serviço antes de salvar.");
+      return;
+    }
 
     setSalvando(true);
     try {
@@ -423,6 +429,15 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
           </div>
           {servicos.length === 0 && (
             <p className="text-[11px] text-ink-500 -mt-2">Nenhum serviço cadastrado ainda — cadastre em Configurações para preencher o valor automaticamente, ou informe o valor manualmente acima.</p>
+          )}
+          {!agendaForm.servicoId && (!Number(agendaForm.valor) || Number(agendaForm.valor) <= 0) && (
+            <div className="-mt-1 bg-amber-50 border border-amber-100 rounded-lg p-3 space-y-1.5">
+              <p className="text-[11px] text-amber-700">⚠️ Sem serviço/valor vinculado, nada será lançado automaticamente no financeiro.</p>
+              <label className="flex items-center gap-1.5 text-[11px] text-amber-800 font-medium">
+                <input type="checkbox" checked={confirmouSemCobranca} onChange={(e) => setConfirmouSemCobranca(e.target.checked)} className="rounded focus-ring" />
+                Confirmo que este agendamento não terá cobrança (cortesia, retorno gratuito, etc.)
+              </label>
+            </div>
           )}
           <Field label="Observações" value={agendaForm.observacao} onChange={(v) => setAgendaForm({ ...agendaForm, observacao: v })} />
         </div>

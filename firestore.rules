@@ -132,6 +132,11 @@ service cloud.firestore {
         allow read, delete: if souAdmin(clinicaId);
       }
 
+      // ---- quadro de tarefas (config das colunas do Kanban) ----
+      match /quadroTarefas/{id} {
+        allow read, write: if souMembro(clinicaId);
+      }
+
       // ---- tarefas ----
       match /tarefas/{id} {
         allow read, create, update: if souMembro(clinicaId);

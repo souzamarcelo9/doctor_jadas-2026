@@ -20,7 +20,7 @@ export default function NotasFiscais() {
   const [issuing, setIssuing] = useState(false);
   const [resultado, setResultado] = useState(null);
   const [contaVinculadaId, setContaVinculadaId] = useState("");
-  const [form, setForm] = useState({ tomador: "", cpfCnpj: "", codigoServico: "04498", valor: "", aliquota: "0.02", discriminacao: "Consulta médica" });
+  const [form, setForm] = useState({ tomador: "", cpfCnpj: "", codigoServico: "04498", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
 
   const contasDisponiveis = contasReceber.filter((c) => c.status === "pendente" && !c.notaFiscalId);
 
@@ -55,6 +55,7 @@ export default function NotasFiscais() {
         codigoServico: form.codigoServico,
         aliquota: Number(form.aliquota),
         discriminacao: form.discriminacao,
+        tipoAtendimento: form.tipoAtendimento,
       });
       setResultado(resposta);
 
@@ -78,7 +79,7 @@ export default function NotasFiscais() {
         }
       }
 
-      setForm({ tomador: "", cpfCnpj: "", codigoServico: "04498", valor: "", aliquota: "0.02", discriminacao: "Consulta médica" });
+      setForm({ tomador: "", cpfCnpj: "", codigoServico: "04498", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
       setContaVinculadaId("");
     } catch (err) {
       console.error("Erro ao emitir NFS-e:", err);
@@ -135,7 +136,16 @@ export default function NotasFiscais() {
               <Field label="Código de serviço" value={form.codigoServico} onChange={(v) => setForm({ ...form, codigoServico: v })} />
               <Field label="Valor do serviço (R$)" type="number" value={form.valor} onChange={(v) => setForm({ ...form, valor: v })} />
               <Field label="Alíquota ISS (ex: 0.02 = 2%)" value={form.aliquota} onChange={(v) => setForm({ ...form, aliquota: v })} />
+              <label className="block text-xs">
+                <span className="text-ink-500 font-medium">Tipo de atendimento</span>
+                <select value={form.tipoAtendimento} onChange={(e) => setForm({ ...form, tipoAtendimento: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring">
+                  <option value="presencial">Presencial (no consultório)</option>
+                  <option value="teleconsulta">Teleconsulta</option>
+                  <option value="domiciliar">Atendimento domiciliar</option>
+                </select>
+              </label>
             </div>
+            <p className="text-[11px] text-ink-500">Reforma Tributária (IBS/CBS): classificação de serviços de saúde (cClassTrib 200029, NBS de clínica médica) já é aplicada automaticamente — o tipo de atendimento acima só ajusta onde a operação é considerada realizada (cIndOp).</p>
             <label className="block text-xs">
               <span className="text-ink-500 font-medium">Discriminação dos serviços</span>
               <textarea rows={3} value={form.discriminacao} onChange={(e) => setForm({ ...form, discriminacao: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring resize-none" />

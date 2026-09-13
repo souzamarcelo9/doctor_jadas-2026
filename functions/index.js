@@ -352,15 +352,37 @@ exports.memedObterToken = onCall({ region: REGION, secrets: [memedApiKey, memedS
 // Referência: Manual de Utilização do Web Service da Prefeitura de São
 // Paulo, versão 2.1 (layout v1) — https://nfe.prefeitura.sp.gov.br/arquivos/nfews.pdf
 //
-// ⚠️ ATENÇÃO — LAYOUT V1 vs V2: este manual documenta o layout v1. A partir
-// de janeiro/2026 (Reforma Tributária) o layout v2 passou a ser obrigatório
-// e provavelmente adiciona campos novos (IBS/CBS) ao tpRPS que este código
-// ainda não cobre. A MECÂNICA (envelope SOAP, algoritmo de assinatura do
-// RPS, TLS mútuo com certificado ICP-Brasil) deve continuar valendo — mas
-// os CAMPOS do XML do RPS precisam ser conferidos contra o schema v2 antes
-// de emitir em produção de verdade.
+// ---------------------------------------------------------------------
+// Reforma Tributária (IBS/CBS) — layout v2 da NFS-e Paulistana
+// ---------------------------------------------------------------------
+// Confirmado com o Manual de Utilização do Web Service da NFS-e v3.3.7
+// (18/06/2026) + planilha oficial de Classificação Tributária + Anexo VII
+// (IndOp_IBSCBS v1.00.00), todos obtidos direto do contribuinte:
+//
+//   cClassTrib 200029 = "Fornecimento dos serviços de saúde humana"
+//     (Anexo III, Art. 130 da LC 214/2025) — redução de 60% em IBS e CBS.
+//     NÃO usar o 200052 (profissões liberais fiscalizadas por conselho) —
+//     esse código lista "médicos veterinários", não médicos humanos.
+//
+//   NBS 123012100 (= "1.2301.21.00") = "Serviços de clínica médica",
+//     dentro do mesmo Anexo III. Se a clínica atender só uma especialidade
+//     com NBS próprio no Anexo III (cirúrgico, psiquiátrico, UTI, urgência,
+//     ginecológico/obstétrico), troque aqui.
+//
+//   cIndOp — Art. 11, Inc. III da LC 214/2025 ("serviço prestado
+//     fisicamente sobre a pessoa"), sub-código conforme o local:
+//       030101 = estabelecimento do fornecedor (consulta presencial no
+//                consultório — o caso mais comum)
+//       030104 = endereço diverso (atendimento domiciliar)
+//     Teleconsulta NÃO se encaixa no Inc. III (não é "fisicamente sobre a
+//     pessoa") — cai no Inc. X (demais serviços, operação onerosa):
+//       100301 = demais serviços, operação onerosa
 //
 // Endpoint novo (recomendado, suporta v1 e v2): https://nfews.prefeitura.sp.gov.br/lotenfe.asmx
+const CCLASSTRIB_SAUDE_HUMANA = "200029";
+const NBS_CLINICA_MEDICA = "123012100"; // "1.2301.21.00" sem os pontos, 9 dígitos
+const CODIGO_IBGE_SAO_PAULO = "3550308";
+const CIND_OP = { presencial: "030101", domiciliar: "030104", teleconsulta: "100301" };
 
 const NFSE_WSDL_HOST = "nfews.prefeitura.sp.gov.br";
 const NFSE_WSDL_PATH = "/lotenfe.asmx";
@@ -459,24 +481,44 @@ exports.nfseSalvarCertificado = onCall({ region: REGION, timeoutSeconds: 30 }, a
   return { ok: true, nomeCertificado: cn, validoAte };
 });
 
-/** Monta a string de 86 posições e assina com RSA-SHA1, conforme o
- * algoritmo de assinatura do RPS descrito no manual (item 4.3.2). */
+/** Monta a string de posições fixas e assina com RSA-SHA1, conforme o
+ * algoritmo de assinatura do RPS versão 2 (manual v3.3.7, item 4.3.2 —
+ * "Campos para assinatura do RPS – versão 2.0"). Difere da v1 em dois
+ * pontos: (1) inscrição municipal com 12 dígitos em vez de 8, (2) usa
+ * ValorFinalCobrado no lugar de ValorServicos (removido no XSD v2). */
 function assinarRps(rps, privateKeyPem) {
   const pad = (v, n) => String(v).padStart(n, "0");
   const padRight = (v, n) => String(v).padEnd(n, " ");
+
+  // Indicador de CPF/CNPJ/NIF do tomador: 1=CPF, 2=CNPJ, 3=não informado, 4=NIF.
+  let indicadorTomador = "3";
+  let cpfCnpjTomadorNumerico = "0".repeat(14);
+  let sufixoNif = "";
+  if (rps.cpfCnpjTomador) {
+    indicadorTomador = rps.cpfCnpjTomador.length === 11 ? "1" : "2";
+    cpfCnpjTomadorNumerico = pad(rps.cpfCnpjTomador, 14);
+  } else if (rps.nifTomador) {
+    indicadorTomador = "4";
+    sufixoNif = rps.nifTomador.slice(0, 40);
+  } else if (rps.naoNifTomador !== undefined && rps.naoNifTomador !== null) {
+    indicadorTomador = "4";
+    sufixoNif = String(rps.naoNifTomador);
+  }
+
   const cadeia =
-    pad(rps.inscricaoMunicipalPrestador, 8) +
+    pad(rps.inscricaoMunicipalPrestador, 12) +
     padRight(rps.serie || "UNICA", 5) +
     pad(rps.numero, 12) +
     rps.dataEmissao.replace(/-/g, "") + // AAAAMMDD
     rps.tipoTributacao + // T | F | I | J
     "N" + // status: Normal
     (rps.issRetido ? "S" : "N") +
-    pad(Math.round(rps.valorServicos * 100), 15) +
+    pad(Math.round(rps.valorFinalCobrado * 100), 15) +
     pad(Math.round((rps.valorDeducoes || 0) * 100), 15) +
     pad(rps.codigoServico, 5) +
-    (rps.cpfCnpjTomador ? (rps.cpfCnpjTomador.length === 11 ? "1" : "2") : "3") +
-    pad(rps.cpfCnpjTomador || "", 14);
+    indicadorTomador +
+    cpfCnpjTomadorNumerico +
+    sufixoNif;
 
   const sign = crypto.createSign("RSA-SHA1");
   sign.update(cadeia, "ascii");
@@ -486,6 +528,20 @@ function assinarRps(rps, privateKeyPem) {
 function montarXmlRps(rps, assinatura) {
   const esc = (s) =>
     String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+
+  let tagCpfCnpjTomador;
+  if (rps.cpfCnpjTomador) {
+    tagCpfCnpjTomador = rps.cpfCnpjTomador.length === 11 ? `<CPF>${rps.cpfCnpjTomador}</CPF>` : `<CNPJ>${rps.cpfCnpjTomador}</CNPJ>`;
+  } else if (rps.nifTomador) {
+    tagCpfCnpjTomador = `<NIF>${esc(rps.nifTomador)}</NIF>`;
+  } else {
+    tagCpfCnpjTomador = `<NaoNIF>${rps.naoNifTomador ?? 0}</NaoNIF>`;
+  }
+
+  // Ordem dos elementos confirmada contra um XML real, processado com
+  // sucesso pela Prefeitura (fornecido pelo usuário) — os campos novos da
+  // Reforma Tributária (ValorIPI em diante) vêm DEPOIS de Discriminacao,
+  // não misturados no meio dos campos da v1. XSD é rígido quanto a isso.
   return `
     <RPS>
       <Assinatura>${assinatura}</Assinatura>
@@ -498,21 +554,39 @@ function montarXmlRps(rps, assinatura) {
       <DataEmissao>${rps.dataEmissao}</DataEmissao>
       <StatusRPS>N</StatusRPS>
       <TributacaoRPS>${rps.tipoTributacao}</TributacaoRPS>
-      <ValorServicos>${rps.valorServicos.toFixed(2)}</ValorServicos>
+      <ValorFinalCobrado>${rps.valorFinalCobrado.toFixed(2)}</ValorFinalCobrado>
       <ValorDeducoes>${(rps.valorDeducoes || 0).toFixed(2)}</ValorDeducoes>
       <CodigoServico>${rps.codigoServico}</CodigoServico>
       <AliquotaServicos>${rps.aliquota}</AliquotaServicos>
       <ISSRetido>${rps.issRetido ? "true" : "false"}</ISSRetido>
-      ${rps.cpfCnpjTomador ? `<CPFCNPJTomador>${rps.cpfCnpjTomador.length === 11 ? `<CPF>${rps.cpfCnpjTomador}</CPF>` : `<CNPJ>${rps.cpfCnpjTomador}</CNPJ>`}</CPFCNPJTomador>` : ""}
+      <CPFCNPJTomador>${tagCpfCnpjTomador}</CPFCNPJTomador>
       ${rps.razaoSocialTomador ? `<RazaoSocialTomador>${esc(rps.razaoSocialTomador)}</RazaoSocialTomador>` : ""}
       <Discriminacao>${esc(rps.discriminacao)}</Discriminacao>
+      <ValorIPI>0.00</ValorIPI>
+      <ExigibilidadeSuspensa>0</ExigibilidadeSuspensa>
+      <NBS>${rps.nbs}</NBS>
+      <cLocPrestacao>${rps.codigoMunicipioPrestacao}</cLocPrestacao>
+      <IBSCBS>
+        <finNFSe>0</finNFSe>
+        <indFinal>${rps.indFinal}</indFinal>
+        <cIndOp>${rps.cIndOp}</cIndOp>
+        <indDest>0</indDest>
+        <valores>
+          <trib>
+            <gIBSCBS>
+              <cClassTrib>${rps.cClassTrib}</cClassTrib>
+            </gIBSCBS>
+          </trib>
+        </valores>
+      </IBSCBS>
     </RPS>`.trim();
 }
 
 /**
- * Monta o RPS, assina, empacota no envelope SOAP e tenta enviar à Prefeitura
- * via TLS mútuo com o certificado da clínica — usando o método de TESTE por
- * padrão (não gera NF-e real mesmo se o certificado for aceito).
+ * Monta o RPS no layout v2 (Reforma Tributária — IBS/CBS), assina, empacota
+ * no envelope SOAP e tenta enviar à Prefeitura via TLS mútuo com o
+ * certificado da clínica — usando o método de TESTE por padrão (não gera
+ * NF-e real mesmo se o certificado for aceito).
  *
  * Com um certificado autoassinado (fase de desenvolvimento), a rejeição do
  * handshake TLS é o resultado ESPERADO — é isso que confirma que o resto do
@@ -521,8 +595,13 @@ function montarXmlRps(rps, assinatura) {
  * termos um certificado ICP-Brasil de verdade.
  *
  * Entrada:  { clinicaId, notaFiscalId, dados: { cnpjPrestador, inscricaoMunicipalPrestador,
- *              cpfCnpjTomador, razaoSocialTomador, valorServicos, codigoServico,
- *              aliquota, discriminacao } }
+ *              cpfCnpjTomador, razaoSocialTomador, valorServicos, codigoServico, aliquota,
+ *              discriminacao, tipoAtendimento?: "presencial"|"teleconsulta"|"domiciliar",
+ *              nbs?, codigoMunicipioPrestacao?, cClassTrib?, indFinal? } }
+ *            Os campos da Reforma Tributária (nbs, cClassTrib, codigoMunicipioPrestacao,
+ *            indFinal) têm default pra serviço médico em São Paulo — só
+ *            precisam ser informados se uma clínica quiser sobrescrever
+ *            (ex: especialidade com NBS próprio no Anexo III da LC 214/2025).
  * Saída:    { status: "enviado_teste" | "rejeitado_certificado" | "erro", detalhe }
  */
 exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (request) => {
@@ -560,20 +639,30 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
     throw new HttpsError("internal", "Certificado configurado está corrompido ou a senha mudou — reimporte em Configurações.");
   }
 
+  const tipoAtendimento = (dados.tipoAtendimento || "presencial").toLowerCase();
+  const cIndOp = tipoAtendimento === "teleconsulta" ? CIND_OP.teleconsulta : tipoAtendimento === "domiciliar" ? CIND_OP.domiciliar : CIND_OP.presencial;
+
   const rps = {
-    inscricaoMunicipalPrestador: dados.inscricaoMunicipalPrestador || "00000000",
+    inscricaoMunicipalPrestador: dados.inscricaoMunicipalPrestador || "000000000000",
     numero: dados.numeroRps || Date.now() % 1e12,
     serie: "UNICA",
     dataEmissao: new Date().toISOString().slice(0, 10),
     tipoTributacao: "T",
     issRetido: false,
-    valorServicos: Number(dados.valorServicos) || 0,
+    valorFinalCobrado: Number(dados.valorServicos) || 0,
     valorDeducoes: 0,
     codigoServico: dados.codigoServico || "04498",
     aliquota: dados.aliquota || 0.02,
     cpfCnpjTomador: (dados.cpfCnpjTomador || "").replace(/\D/g, "") || null,
     razaoSocialTomador: dados.razaoSocialTomador,
     discriminacao: dados.discriminacao,
+    // Campos da Reforma Tributária (IBS/CBS) — ver comentário no topo do
+    // arquivo com a justificativa de cada constante.
+    nbs: dados.nbs || NBS_CLINICA_MEDICA,
+    codigoMunicipioPrestacao: dados.codigoMunicipioPrestacao || CODIGO_IBGE_SAO_PAULO,
+    cClassTrib: dados.cClassTrib || CCLASSTRIB_SAUDE_HUMANA,
+    cIndOp,
+    indFinal: dados.indFinal ?? 1, // paciente pessoa física consumindo o serviço para si mesmo
   };
 
   const assinatura = assinarRps(rps, privateKeyPem);
@@ -584,15 +673,23 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   // aqui — depende de uma biblioteca de XMLDSig (ex.: xml-crypto) e do
   // certificado ICP-Brasil real para ter qualquer valor prático de testar.
   // Fica marcado como próximo passo quando o certificado real chegar.
+  //
+  // Versao="2" em ambos os lugares (Cabecalho e VersaoSchema) é obrigatório
+  // pro layout da Reforma Tributária — confirmado no changelog do manual
+  // v3.3.7 ("Orientações: no cabeçalho, o campo 'Versao' deverá ser igual
+  // a 2"). Mantive ValorTotalServicos/ValorTotalDeducoes no Cabecalho: o
+  // changelog só menciona a remoção desses dois campos para o serviço
+  // ASSÍNCRONO (PedidoEnvioLoteRPSAsync) — não achei confirmação de que
+  // valha também pro síncrono que usamos aqui, então mantive por segurança.
   const mensagemXml = `<?xml version="1.0" encoding="utf-8"?>
-<PedidoEnvioLoteRPS xmlns="http://www.prefeitura.sp.gov.br/nfe" Versao="1">
-  <Cabecalho Versao="1">
+<PedidoEnvioLoteRPS xmlns="http://www.prefeitura.sp.gov.br/nfe" Versao="2">
+  <Cabecalho Versao="2">
     <CPFCNPJRemetente><CNPJ>${(dados.cnpjPrestador || "").replace(/\D/g, "")}</CNPJ></CPFCNPJRemetente>
     <transacao>true</transacao>
     <dtInicio>${rps.dataEmissao}</dtInicio>
     <dtFim>${rps.dataEmissao}</dtFim>
     <QtdRPS>1</QtdRPS>
-    <ValorTotalServicos>${rps.valorServicos.toFixed(2)}</ValorTotalServicos>
+    <ValorTotalServicos>${rps.valorFinalCobrado.toFixed(2)}</ValorTotalServicos>
     <ValorTotalDeducoes>0.00</ValorTotalDeducoes>
   </Cabecalho>
   ${xmlRps}
@@ -603,7 +700,7 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
 <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
   <soap:Body>
     <${metodo}Request xmlns="http://www.prefeitura.sp.gov.br/nfe">
-      <VersaoSchema>1</VersaoSchema>
+      <VersaoSchema>2</VersaoSchema>
       <MensagemXML><![CDATA[${mensagemXml}]]></MensagemXML>
     </${metodo}Request>
   </soap:Body>

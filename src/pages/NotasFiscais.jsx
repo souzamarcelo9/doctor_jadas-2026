@@ -20,7 +20,7 @@ export default function NotasFiscais() {
   const [issuing, setIssuing] = useState(false);
   const [resultado, setResultado] = useState(null);
   const [contaVinculadaId, setContaVinculadaId] = useState("");
-  const [form, setForm] = useState({ tomador: "", cpfCnpj: "", codigoServico: "04498", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
+  const [form, setForm] = useState({ tomador: "", cpfCnpj: "", codigoServico: "04030", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
 
   const contasDisponiveis = contasReceber.filter((c) => c.status === "pendente" && !c.notaFiscalId);
 
@@ -79,7 +79,7 @@ export default function NotasFiscais() {
         }
       }
 
-      setForm({ tomador: "", cpfCnpj: "", codigoServico: "04498", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
+      setForm({ tomador: "", cpfCnpj: "", codigoServico: "04030", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
       setContaVinculadaId("");
     } catch (err) {
       console.error("Erro ao emitir NFS-e:", err);
@@ -134,6 +134,9 @@ export default function NotasFiscais() {
               <Field label="Tomador do serviço" value={form.tomador} onChange={(v) => setForm({ ...form, tomador: v })} />
               <Field label="CPF/CNPJ" value={form.cpfCnpj} onChange={(v) => setForm({ ...form, cpfCnpj: v })} />
               <Field label="Código de serviço" value={form.codigoServico} onChange={(v) => setForm({ ...form, codigoServico: v })} />
+              {form.codigoServico === "04030" && (
+                <p className="text-[10px] text-emerald-600 -mt-1.5 col-span-2">✓ 04030 — "Medicina e biomedicina" (PJ), item 4.01, confirmado no Anexo 1 da IN SF/SUREM 08/2011 (atualizado até IN 03/2026).</p>
+              )}
               <Field label="Valor do serviço (R$)" type="number" value={form.valor} onChange={(v) => setForm({ ...form, valor: v })} />
               <Field label="Alíquota ISS (ex: 0.02 = 2%)" value={form.aliquota} onChange={(v) => setForm({ ...form, aliquota: v })} />
               <label className="block text-xs">

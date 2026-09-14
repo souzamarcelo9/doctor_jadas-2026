@@ -651,7 +651,7 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
     issRetido: false,
     valorFinalCobrado: Number(dados.valorServicos) || 0,
     valorDeducoes: 0,
-    codigoServico: dados.codigoServico || "04498",
+    codigoServico: dados.codigoServico || "04030", // Medicina e biomedicina (PJ) — item 4.01, Anexo 1 IN SF/SUREM 08/2011 (atualizado até IN 03/2026)
     aliquota: dados.aliquota || 0.02,
     cpfCnpjTomador: (dados.cpfCnpjTomador || "").replace(/\D/g, "") || null,
     razaoSocialTomador: dados.razaoSocialTomador,

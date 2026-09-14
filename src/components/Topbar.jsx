@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Bell, HelpCircle, ThumbsUp, Maximize2, Minimize2, LogOut, ChevronDown, FileSignature, MessageSquarePlus, X, Send, CheckCircle2, Loader2 } from "lucide-react";
+import { Bell, HelpCircle, ThumbsUp, Maximize2, Minimize2, LogOut, ChevronDown, FileSignature, MessageSquarePlus, X, Send, CheckCircle2, Loader2, Menu } from "lucide-react";
+import { useSidebar } from "../context/SidebarContext";
 
 // TODO: trocar pelo link real da central de ajuda quando existir — por
 // enquanto aponta pro site institucional como placeholder.
@@ -22,6 +23,7 @@ export default function Topbar({ title, timer }) {
     [profissionalId]
   );
   const navigate = useNavigate();
+  const { alternar: alternarSidebar } = useSidebar();
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [telaCheia, setTelaCheia] = useState(false);
@@ -63,6 +65,9 @@ export default function Topbar({ title, timer }) {
   return (
     <header className="h-16 flex items-center justify-between px-4 lg:px-6 border-b border-black/5 bg-white/80 backdrop-blur sticky top-0 z-20">
       <div className="flex items-center gap-3 min-w-0">
+        <button onClick={alternarSidebar} className="md:hidden p-1.5 -ml-1 rounded-lg hover:bg-black/5 text-ink-700 focus-ring shrink-0">
+          <Menu size={20} />
+        </button>
         <h1 className="font-display font-semibold text-ink-900 text-base lg:text-lg truncate">{title}</h1>
         {timer && (
           <span className="hidden sm:inline text-xs text-ink-500 bg-brand-50 border border-brand-100 rounded-full px-3 py-1">

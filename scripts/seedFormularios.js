@@ -227,12 +227,155 @@ const lawtonBrody = {
   ativo: true,
 };
 
-async function main() {
-  const templates = [ivcf20, meem, edg15, gijon, lawtonBrody];
-  for (const t of templates) {
-    const ref = await db.collection(`clinicas/${CLINICA_ID}/formularios`).add(t);
-    console.log(`Criado: ${t.nome} (${ref.id}) — ${t.campos.length} campos`);
+// ---------------------------------------------------------------------
+// DLQI-BRA — Índice de Qualidade de Vida em Dermatologia
+// Fonte: Finlay & Khan (1994), versão brasileira validada (Martins,
+// Arruda & Mugnaini, 2004), verbatim conforme anexo oficial de protocolo
+// clínico estadual (SES/GO). Máximo 30 pontos (10 itens × 3).
+// Corte: 0-1 nenhum efeito · 2-5 pequeno · 6-10 moderado · 11-20 grande · 21-30 muito grande.
+// ---------------------------------------------------------------------
+function dlqiItem(pergunta, semRelevancia) {
+  return campo(pergunta, "opcoes", [
+    { label: "Realmente muito", valor: 3 },
+    { label: "Bastante", valor: 2 },
+    { label: "Um pouco", valor: 1 },
+    { label: semRelevancia ? "Nada / sem relevância" : "Nada", valor: 0 },
+  ]);
+}
+const dlqi = {
+  nome: "DLQI — Questionário de Qualidade de Vida em Dermatologia",
+  descricao: "Índice de Qualidade de Vida em Dermatologia (Finlay & Khan, 1994; versão brasileira DLQI-BRA). Refere-se à ÚLTIMA SEMANA. Máx. 30 pontos — 0-1 nenhum efeito · 2-5 pequeno · 6-10 moderado · 11-20 grande · 21-30 muito grande.",
+  campos: [
+    dlqiItem("1. O quanto sua pele foi afetada na última semana por coceira, inflamação, dor ou queimação?", false),
+    dlqiItem("2. Quanto constrangimento ou limitação foi causado por sua pele na última semana?", false),
+    dlqiItem("3. O quanto sua pele interferiu em compras ou passeios (em casa ou locais públicos) na última semana?", true),
+    dlqiItem("4. Até que ponto sua pele interferiu com relação às roupas que você usa?", true),
+    dlqiItem("5. O quanto sua pele afetou suas atividades sociais ou de lazer na última semana?", true),
+    dlqiItem("6. Quão difícil foi praticar esportes na última semana por causa da sua pele?", true),
+    campo("7. Sua pele impediu ou atrapalhou seu trabalho/estudo na última semana?", "opcoes", [
+      { label: "Sim, impediu de ir trabalhar/estudar", valor: 3 },
+      { label: "Não impediu, mas atrapalhou bastante", valor: 2 },
+      { label: "Não impediu, mas atrapalhou um pouco", valor: 1 },
+      { label: "Não impediu nem atrapalhou", valor: 0 },
+    ]),
+    dlqiItem("8. Quão problemática ficou sua relação com parceiro(a), amigos ou parentes por causa da sua pele?", true),
+    dlqiItem("9. Até que ponto sua pele criou dificuldades na sua vida sexual na última semana?", true),
+    dlqiItem("10. Até que ponto o tratamento dermatológico criou problemas para você na última semana?", true),
+  ],
+  pontuavel: true,
+  ativo: true,
+};
+
+// ---------------------------------------------------------------------
+// Avaliação de Risco Cardiovascular
+// ---------------------------------------------------------------------
+// ⚠️ NÃO calcula o percentual de risco automaticamente. O Escore de Risco
+// Global (Framingham revisado, D'Agostino et al. 2008, adotado pela
+// Diretriz de Prevenção Cardiovascular da SBC) tem tabelas de pontos por
+// faixa de idade/colesterol/HDL/PAS, diferentes para homens e mulheres —
+// as fontes que consultei extraíram essas tabelas de um jeito
+// inconsistente o bastante (alinhamento de colunas ambíguo) pra eu não ter
+// certeza suficiente de transcrever os números certos. Prefiro montar só
+// a CAPTURA estruturada dos dados e deixar o cálculo do percentual pra
+// consulta manual da tabela oficial, a errar silenciosamente um ponto de
+// corte clínico. Se você tiver a tabela exata (ou uma calculadora
+// confiável), me manda que eu completo o score automático depois.
+const riscoCardiovascular = {
+  nome: "Avaliação de Risco Cardiovascular",
+  descricao: "Captura os dados de entrada do Escore de Risco Global (Framingham revisado / D'Agostino et al. 2008, adotado pela Diretriz SBC de Prevenção Cardiovascular). NÃO calcula o percentual de risco automaticamente — consulte a tabela oficial (distinta para homens/mulheres) com os dados coletados aqui.",
+  campos: [
+    campo("Idade", "numero"),
+    campo("Sexo", "opcoes", [{ label: "Masculino", valor: 0 }, { label: "Feminino", valor: 0 }]),
+    campo("Colesterol total (mg/dL)", "numero"),
+    campo("HDL-colesterol (mg/dL)", "numero"),
+    campo("Pressão arterial sistólica (mmHg)", "numero"),
+    campo("Em tratamento para hipertensão?", "opcoes", [{ label: "Sim", valor: 0 }, { label: "Não", valor: 0 }]),
+    campo("Tabagista atual?", "opcoes", [{ label: "Sim", valor: 0 }, { label: "Não", valor: 0 }]),
+    campo("Diabetes?", "opcoes", [{ label: "Sim", valor: 0 }, { label: "Não", valor: 0 }]),
+    campo("História familiar de doença cardiovascular prematura?", "opcoes", [{ label: "Sim", valor: 0 }, { label: "Não", valor: 0 }]),
+    campo("Observações / conduta", "texto"),
+  ],
+  pontuavel: false,
+  ativo: true,
+};
+
+// ---------------------------------------------------------------------
+// Anamnese Dermatológica — template de história clínica estruturada
+// (não é uma escala pontuada, é um roteiro de anamnese)
+// ---------------------------------------------------------------------
+const anamneseDermatologica = {
+  nome: "Anamnese Dermatológica",
+  descricao: "Roteiro estruturado de história clínica dermatológica — não é uma escala pontuada, é um checklist de anamnese.",
+  campos: [
+    campo("Queixa principal / motivo da consulta", "texto"),
+    campo("Tempo de evolução da lesão", "texto"),
+    campo("Localização da(s) lesão(ões)", "texto"),
+    campo("Características (cor, tamanho, forma, textura)", "texto"),
+    campo("Sintomas associados (prurido, dor, ardência, descamação, etc.)", "texto"),
+    campo("Fatores de piora ou melhora", "texto"),
+    campo("Medicamentos tópicos ou sistêmicos em uso", "texto"),
+    campo("Antecedentes pessoais de doenças de pele", "texto"),
+    campo("Antecedentes familiares de doenças de pele", "texto"),
+    campo("Exposição solar, ocupacional ou a alergênicos", "texto"),
+    campo("Fototipo (escala de Fitzpatrick)", "opcoes", [
+      { label: "I", valor: 0 }, { label: "II", valor: 0 }, { label: "III", valor: 0 },
+      { label: "IV", valor: 0 }, { label: "V", valor: 0 }, { label: "VI", valor: 0 },
+    ]),
+  ],
+  pontuavel: false,
+  ativo: true,
+};
+
+// ---------------------------------------------------------------------
+// Triagem Pré-Consulta — checklist geral de acolhimento/triagem
+// ---------------------------------------------------------------------
+const triagemPreConsulta = {
+  nome: "Triagem Pré-Consulta",
+  descricao: "Checklist geral de acolhimento antes da consulta — não é uma escala pontuada.",
+  campos: [
+    campo("Motivo da consulta", "texto"),
+    campo("Sintomas atuais", "texto"),
+    campo("Início dos sintomas", "texto"),
+    campo("Medicações em uso", "texto"),
+    campo("Alergias conhecidas", "texto"),
+    campo("Comorbidades relevantes", "texto"),
+    campo("Sinais de alerta (febre alta, falta de ar, dor no peito, sangramento)?", "opcoes", [{ label: "Sim", valor: 0 }, { label: "Não", valor: 0 }]),
+    campo("Observações da recepção/triagem", "texto"),
+  ],
+  pontuavel: false,
+  ativo: true,
+};
+
+/** Cria o template se não existir um com esse nome, ou atualiza os campos
+ * de um já existente (útil pra completar templates que ficaram vazios —
+ * ex: criados durante o bug de duplicados/crash — sem gerar uma cópia
+ * nova ao lado). */
+async function upsertPorNome(dados) {
+  const snap = await db.collection(`clinicas/${CLINICA_ID}/formularios`).where("nome", "==", dados.nome).get();
+  if (snap.empty) {
+    const ref = await db.collection(`clinicas/${CLINICA_ID}/formularios`).add(dados);
+    console.log(`Criado: ${dados.nome} (${ref.id}) — ${dados.campos.length} campos`);
+    return;
   }
+  // Se houver mais de um com o mesmo nome (duplicado antigo), completa o
+  // primeiro e deixa os outros como estão — a limpeza de duplicados em si
+  // já tem um botão dedicado em Configurações → Formulários de Avaliação.
+  const doc = snap.docs[0];
+  await doc.ref.update({ campos: dados.campos, descricao: dados.descricao, pontuavel: dados.pontuavel });
+  console.log(`Atualizado: ${dados.nome} (${doc.id}) — ${dados.campos.length} campos`);
+}
+
+async function main() {
+  const templatesNovos = [ivcf20, meem, edg15, gijon, lawtonBrody];
+  const templatesUpsert = [dlqi, riscoCardiovascular, anamneseDermatologica, triagemPreConsulta];
+
+  for (const t of templatesNovos) {
+    await upsertPorNome(t);
+  }
+  for (const t of templatesUpsert) {
+    await upsertPorNome(t);
+  }
+
   console.log("\nPronto! Veja em Atendimento → Formulários, ou gerencie em Configurações → Formulários de Avaliação.");
 }
 

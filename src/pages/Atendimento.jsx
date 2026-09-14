@@ -16,13 +16,16 @@ import Conduta from "../components/atendimento/Conduta";
 import Prescricoes from "../components/atendimento/Prescricoes";
 import Encaminhamento from "../components/atendimento/Encaminhamento";
 import Formularios from "../components/atendimento/Formularios";
+import Antropometria from "../components/atendimento/Antropometria";
+import Vacinas from "../components/atendimento/Vacinas";
+import ErrorBoundary from "../components/ErrorBoundary";
 import { useTenant } from "../context/TenantContext";
 import { enviarAvaliacaoPaciente } from "../lib/avaliacoes";
 import { Trash2, CheckCircle2, Loader2, Star } from "lucide-react";
 
 const tabs = [
   "Queixa Paciente", "Histórico", "Exame físico", "Problemas", "Alergias",
-  "Hist. Exames", "Sinais Vitais", "Imagens", "Formulários", "Encaminhamento",
+  "Hist. Exames", "Sinais Vitais", "Medidas", "Vacinas", "Imagens", "Formulários", "Encaminhamento",
   "Conduta", "Prescrições",
 ];
 
@@ -80,6 +83,8 @@ export default function Atendimento() {
       case "Problemas": return <Problemas />;
       case "Alergias": return <Alergias />;
       case "Sinais Vitais": return <SinaisVitais />;
+      case "Medidas": return <Antropometria />;
+      case "Vacinas": return <Vacinas />;
       case "Hist. Exames": return <HistExames />;
       case "Imagens": return <Imagens />;
       case "Conduta": return <Conduta />;
@@ -112,7 +117,11 @@ export default function Atendimento() {
           <div className="px-2">
             <Tabs tabs={tabs} active={active} onChange={setActive} />
           </div>
-          <div className="p-4 lg:p-5">{renderTab()}</div>
+          <div className="p-4 lg:p-5">
+            <ErrorBoundary key={active} titulo={`Não foi possível carregar "${active}"`} mensagem="Essa aba encontrou um problema — as outras continuam funcionando normalmente. Tente trocar de aba e voltar.">
+              {renderTab()}
+            </ErrorBoundary>
+          </div>
         </div>
       </main>
       <div className="sticky bottom-0 bg-white border-t border-black/5 px-4 lg:px-6 py-3 flex items-center justify-end gap-3">

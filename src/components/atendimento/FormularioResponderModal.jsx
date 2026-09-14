@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { X, ClipboardCheck, Loader2, AlertTriangle } from "lucide-react";
 import { useTenant } from "../../context/TenantContext";
 import { criarDocumento } from "../../lib/firestore";
+import { paraArray } from "../../lib/arrays";
 
 export default function FormularioResponderModal({ template, onClose }) {
   const { pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
@@ -9,7 +10,7 @@ export default function FormularioResponderModal({ template, onClose }) {
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
 
-  const campos = useMemo(() => template.campos || [], [template.campos]);
+  const campos = useMemo(() => paraArray(template.campos), [template.campos]);
 
   const scoreTotal = useMemo(() => {
     let total = 0;
@@ -17,7 +18,7 @@ export default function FormularioResponderModal({ template, onClose }) {
       const v = valores[campo.id];
       if (campo.tipo === "numero") total += Number(v) || 0;
       if (campo.tipo === "opcoes") {
-        const opcao = (campo.opcoes || []).find((o) => o.label === v);
+        const opcao = paraArray(campo.opcoes).find((o) => o.label === v);
         total += opcao?.valor || 0;
       }
     }
@@ -32,7 +33,7 @@ export default function FormularioResponderModal({ template, onClose }) {
     try {
       const respostas = campos.map((c) => {
         const v = valores[c.id] ?? "";
-        const pontos = c.tipo === "numero" ? (Number(v) || 0) : c.tipo === "opcoes" ? ((c.opcoes || []).find((o) => o.label === v)?.valor || 0) : 0;
+        const pontos = c.tipo === "numero" ? (Number(v) || 0) : c.tipo === "opcoes" ? (paraArray(c.opcoes).find((o) => o.label === v)?.valor || 0) : 0;
         return { campoId: c.id, label: c.label, tipo: c.tipo, valor: v, pontos };
       });
       await criarDocumento(`${pacientePath}/formulariosRespondidos`, {
@@ -84,7 +85,7 @@ export default function FormularioResponderModal({ template, onClose }) {
               )}
               {campo.tipo === "opcoes" && (
                 <div className="flex flex-wrap gap-2">
-                  {(campo.opcoes || []).map((o) => (
+                  {paraArray(campo.opcoes).map((o) => (
                     <button
                       key={o.label}
                       onClick={() => setValores((v) => ({ ...v, [campo.id]: o.label }))}

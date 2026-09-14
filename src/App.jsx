@@ -3,6 +3,7 @@ import { AuthProvider } from "./context/AuthContext";
 import { TenantProvider } from "./context/TenantContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Sidebar from "./components/Sidebar";
+import { SidebarProvider } from "./context/SidebarContext";
 import Login from "./pages/Login";
 import Cadastro from "./pages/Cadastro";
 import Onboarding from "./pages/Onboarding";
@@ -24,10 +25,12 @@ function AppLayout() {
   return (
     <ProtectedRoute>
       <TenantProvider>
-        <div className="flex min-h-screen bg-[#f4f8f8]">
-          <Sidebar />
-          <Outlet />
-        </div>
+        <SidebarProvider>
+          <div className="flex min-h-screen bg-[#f4f8f8]">
+            <Sidebar />
+            <Outlet />
+          </div>
+        </SidebarProvider>
       </TenantProvider>
     </ProtectedRoute>
   );

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { X, FileEdit, Plus, Trash2, Loader2, Power, AlertTriangle, GripVertical } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
 import { useFirestoreCollection, criarDocumento, atualizarDocumento, excluirDocumento } from "../lib/firestore";
+import { paraArray } from "../lib/arrays";
 
 const TIPOS_CAMPO = [
   { valor: "numero", label: "Número (soma direto no score)" },
@@ -51,15 +52,45 @@ function ListaTemplates({ clinicaId }) {
     await excluirDocumento(`clinicas/${clinicaId}/formularios`, id);
   }
 
+  // Agrupa por nome pra detectar duplicados (ex: template criado várias
+  // vezes sem querer) e oferecer limpeza em lote em vez de excluir um por
+  // um manualmente.
+  const grupos = {};
+  templates.forEach((t) => { (grupos[t.nome] = grupos[t.nome] || []).push(t); });
+  const gruposDuplicados = Object.entries(grupos).filter(([, lista]) => lista.length > 1);
+
+  async function limparDuplicados(nome, lista) {
+    // Mantém o que tem mais campos configurados (o mais "completo"); se
+    // empatar, mantém o criado por último.
+    const ordenados = [...lista].sort((a, b) => paraArray(b.campos).length - paraArray(a.campos).length);
+    const manter = ordenados[0];
+    const excluir = ordenados.slice(1);
+    if (!confirm(`Manter 1 "${nome}" (${paraArray(manter.campos).length} campos) e excluir os outros ${excluir.length}?`)) return;
+    await Promise.all(excluir.map((t) => excluirDocumento(`clinicas/${clinicaId}/formularios`, t.id)));
+  }
+
   return (
     <div className="space-y-1.5">
       {loading && <div className="text-xs text-ink-500 flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Carregando…</div>}
       {!loading && templates.length === 0 && <p className="text-xs text-ink-500 text-center py-6">Nenhum template cadastrado ainda — crie um na aba "Novo template".</p>}
+
+      {gruposDuplicados.length > 0 && (
+        <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 space-y-2">
+          <p className="text-xs font-semibold text-amber-700">Encontrei nomes duplicados:</p>
+          {gruposDuplicados.map(([nome, lista]) => (
+            <div key={nome} className="flex items-center justify-between gap-2">
+              <span className="text-xs text-amber-800">{nome} — {lista.length} cópias</span>
+              <button onClick={() => limparDuplicados(nome, lista)} className="text-[11px] font-semibold text-amber-800 underline shrink-0">Manter só 1</button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {templates.map((t) => (
         <div key={t.id} className={`flex items-center gap-3 border border-black/5 rounded-lg p-3 ${t.ativo === false ? "opacity-50" : ""}`}>
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold text-ink-900">{t.nome}</div>
-            <div className="text-[11px] text-ink-500 mt-0.5">{(t.campos || []).length} campo(s) configurado(s){t.pontuavel === false ? " · sem score" : ""}</div>
+            <div className="text-[11px] text-ink-500 mt-0.5">{paraArray(t.campos).length} campo(s) configurado(s){t.pontuavel === false ? " · sem score" : ""}</div>
           </div>
           <button onClick={() => alternarAtivo(t)} title={t.ativo === false ? "Reativar" : "Desativar"} className={`p-1.5 rounded-lg focus-ring shrink-0 ${t.ativo === false ? "text-ink-500 hover:bg-gray-100" : "text-emerald-600 hover:bg-emerald-50"}`}>
             <Power size={14} />
@@ -104,11 +135,13 @@ function NovoTemplate({ clinicaId, onCriado }) {
     setErro("");
     if (!nome.trim()) { setErro("Dê um nome ao formulário."); return; }
     if (campos.length === 0 || campos.some((c) => !c.label.trim())) { setErro("Todo campo precisa de um rótulo."); return; }
+    const campoOpcoesSemOpcao = campos.find((c) => c.tipo === "opcoes" && paraArray(c.opcoes).filter((o) => o.label.trim()).length === 0);
+    if (campoOpcoesSemOpcao) { setErro(`O campo "${campoOpcoesSemOpcao.label}" é do tipo Opções mas não tem nenhuma opção preenchida.`); return; }
     setSalvando(true);
     try {
       const camposLimpos = campos.map(({ id, label, tipo, opcoes }) => ({
         id, label: label.trim(), tipo,
-        opcoes: tipo === "opcoes" ? opcoes.filter((o) => o.label.trim()).map((o) => ({ label: o.label.trim(), valor: Number(o.valor) || 0 })) : null,
+        opcoes: tipo === "opcoes" ? paraArray(opcoes).filter((o) => o.label.trim()).map((o) => ({ label: o.label.trim(), valor: Number(o.valor) || 0 })) : null,
       }));
       const pontuavel = camposLimpos.some((c) => c.tipo !== "texto");
       await criarDocumento(`clinicas/${clinicaId}/formularios`, { nome: nome.trim(), campos: camposLimpos, pontuavel, ativo: true });

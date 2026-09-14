@@ -3,6 +3,7 @@ import { FileEdit, ClipboardCheck, Loader2, Eye, TrendingUp, X } from "lucide-re
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreCollection, alternarAtivo } from "../../lib/firestore";
+import { paraArray } from "../../lib/arrays";
 import FormularioResponderModal from "./FormularioResponderModal";
 
 export default function Formularios() {
@@ -41,7 +42,7 @@ export default function Formularios() {
             <div className="w-9 h-9 rounded-lg bg-brand-50 text-brand-600 flex items-center justify-center shrink-0"><FileEdit size={16} /></div>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-semibold text-ink-900">{f.nome}</div>
-              <div className="text-[11px] text-ink-500 mt-0.5">{(f.campos || []).length} campo(s){f.pontuavel === false ? " · sem score" : ""}</div>
+              <div className="text-[11px] text-ink-500 mt-0.5">{paraArray(f.campos).length} campo(s){f.pontuavel === false ? " · sem score" : ""}</div>
               <button onClick={() => setTemplateRespondendo(f)} className="flex items-center gap-1 text-[11px] font-semibold text-brand-600 hover:text-brand-700 mt-2">
                 <ClipboardCheck size={12} /> Aplicar ao atendimento
               </button>

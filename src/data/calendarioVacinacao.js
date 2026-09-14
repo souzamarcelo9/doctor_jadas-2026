@@ -1,0 +1,111 @@
+// Calendário Nacional de Vacinação (PNI/Ministério da Saúde) — extraído
+// verbatim de https://www.gov.br/saude/pt-br/vacinacao/calendario em
+// setembro/2026. Serve como REFERÊNCIA dentro do sistema (o médico
+// consulta o que é recomendado pra cada faixa etária) — o registro em si
+// (o que o paciente realmente tomou) é livre, não trava no que está aqui.
+//
+// Como esse calendário é atualizado periodicamente pelo PNI, vale reconferir
+// contra a fonte oficial de tempos em tempos: a data de "Atualizado em"
+// aparece na própria página do Ministério da Saúde.
+export const CALENDARIO_VACINACAO = [
+  {
+    grupo: "crianca",
+    titulo: "Criança",
+    faixaEtaria: "0 a 9 anos, 11 meses e 29 dias",
+    itens: [
+      { momento: "Ao nascer", vacina: "Hepatite B", doses: "1 dose" },
+      { momento: "Ao nascer", vacina: "BCG", doses: "dose única" },
+      { momento: "2 meses", vacina: "Penta (DTP + Hib + Hepatite B)", doses: "1ª dose" },
+      { momento: "2 meses", vacina: "Poliomielite inativada (VIP)", doses: "1ª dose" },
+      { momento: "2 meses", vacina: "Rotavírus humano", doses: "1ª dose", obs: "1ª dose entre 1m15d e 11m29d; 2ª dose entre 3m15d e 23m29d; intervalo mínimo de 30 dias." },
+      { momento: "2 meses", vacina: "Pneumocócica 20-valente", doses: "1ª dose" },
+      { momento: "3 meses", vacina: "Meningocócica C", doses: "1ª dose" },
+      { momento: "4 meses", vacina: "Penta (DTP + Hib + Hepatite B)", doses: "2ª dose" },
+      { momento: "4 meses", vacina: "Poliomielite inativada (VIP)", doses: "2ª dose" },
+      { momento: "4 meses", vacina: "Rotavírus humano", doses: "2ª dose" },
+      { momento: "4 meses", vacina: "Pneumocócica 10-valente", doses: "2ª dose" },
+      { momento: "5 meses", vacina: "Meningocócica C", doses: "2ª dose" },
+      { momento: "6 meses", vacina: "Penta (DTP + Hib + Hepatite B)", doses: "3ª dose" },
+      { momento: "6 meses", vacina: "Poliomielite inativada (VIP)", doses: "3ª dose" },
+      { momento: "6 meses", vacina: "Influenza (trivalente)", doses: "1ª dose", obs: "Anual, dos 6 meses aos <6 anos. 1ª vez: 2 doses c/ 30 dias; depois, 1 dose/ano." },
+      { momento: "6 meses", vacina: "Covid-19", doses: "1ª dose", obs: "Esquema de 3 doses (6, 7 e 9 meses)." },
+      { momento: "6 a 8 meses", vacina: "Febre amarela", doses: "1 dose (casos excepcionais)", obs: "Só se residente/viajante pra área de risco, mediante avaliação." },
+      { momento: "7 meses", vacina: "Covid-19", doses: "2ª dose" },
+      { momento: "9 meses", vacina: "Covid-19", doses: "3ª dose" },
+      { momento: "9 meses", vacina: "Febre amarela", doses: "1ª dose" },
+      { momento: "12 meses", vacina: "Pneumocócica 20-valente", doses: "reforço" },
+      { momento: "12 meses", vacina: "Meningocócica ACWY", doses: "1 dose" },
+      { momento: "12 meses", vacina: "Tríplice viral (SCR)", doses: "1ª dose" },
+      { momento: "15 meses", vacina: "DTP", doses: "1º reforço" },
+      { momento: "15 meses", vacina: "Poliomielite inativada (VIP)", doses: "1º reforço" },
+      { momento: "15 meses", vacina: "Tríplice viral (SCR)", doses: "2ª dose" },
+      { momento: "15 meses", vacina: "Varicela", doses: "1ª dose" },
+      { momento: "15 meses", vacina: "Hepatite A", doses: "1 dose" },
+      { momento: "4 anos", vacina: "DTP", doses: "2º reforço", obs: "DTP só até 6 anos 11m29d; depois, usar dT." },
+      { momento: "4 anos", vacina: "Poliomielite inativada (VIP)", doses: "2º reforço" },
+      { momento: "4 anos", vacina: "Varicela", doses: "2ª dose" },
+      { momento: "4 anos", vacina: "Febre amarela", doses: "reforço" },
+      { momento: "5 anos", vacina: "Pneumocócica 20-valente", doses: "1 dose", obs: "Só povos indígenas sem histórico com pneumo conjugada." },
+      { momento: "9 anos", vacina: "HPV4", doses: "1 dose", obs: "Em atraso: vacinar até 14a11m29d, o quanto antes." },
+    ],
+  },
+  {
+    grupo: "adolescenteJovem",
+    titulo: "Adolescente e Jovem",
+    faixaEtaria: "10 a 24 anos, 11 meses e 29 dias",
+    itens: [
+      { momento: "Conforme histórico", vacina: "HPV4", doses: "1 dose" },
+      { momento: "Conforme histórico", vacina: "Hepatite B", doses: "3 doses" },
+      { momento: "Conforme histórico", vacina: "Febre amarela", doses: "1 dose" },
+      { momento: "Conforme histórico", vacina: "Tríplice viral (SCR)", doses: "2 doses" },
+      { momento: "Conforme histórico", vacina: "Varicela", doses: "2 doses", obs: "Só trabalhadores da saúde e povos indígenas." },
+      { momento: "Conforme histórico", vacina: "Pneumocócica 20-valente", doses: "1 dose", obs: "Só povos indígenas sem histórico com pneumo conjugada." },
+      { momento: "10 anos", vacina: "Dengue (DNG4)", doses: "2 doses (intervalo de 3 meses)", obs: "Em atraso: até 14a11m29d. Usar sempre o mesmo laboratório no esquema." },
+      { momento: "11 anos", vacina: "Meningocócica ACWY", doses: "1 dose", obs: "Em atraso: vacinar até 14a11m29d." },
+      { momento: "14 anos", vacina: "dT", doses: "3º reforço" },
+      { momento: "24 anos", vacina: "dT", doses: "4º reforço", obs: "Profissionais de saúde/parteiras que atuam com recém-nascidos: usar dTpa." },
+    ],
+  },
+  {
+    grupo: "adulto",
+    titulo: "Adulto",
+    faixaEtaria: "25 a 59 anos",
+    itens: [
+      { momento: "Conforme histórico", vacina: "Hepatite B", doses: "3 doses" },
+      { momento: "Conforme histórico", vacina: "dT", doses: "3 doses", obs: "Reforço aos 34 anos e depois a cada 10 anos (5 anos se exposição a risco)." },
+      { momento: "Conforme histórico", vacina: "Febre amarela", doses: "1 dose" },
+      { momento: "Conforme histórico", vacina: "Tríplice viral (SCR)", doses: "até 29a: 2 doses · 30-59a: 1 dose · trabalhador de saúde: 2 doses" },
+      { momento: "Conforme histórico", vacina: "Varicela", doses: "2 doses", obs: "Só trabalhadores da saúde e povos indígenas." },
+      { momento: "Conforme histórico", vacina: "Pneumocócica 20-valente", doses: "1 dose", obs: "Só povos indígenas sem histórico com pneumo conjugada." },
+    ],
+  },
+  {
+    grupo: "idoso",
+    titulo: "Idoso",
+    faixaEtaria: "a partir de 60 anos",
+    itens: [
+      { momento: "Conforme histórico", vacina: "Hepatite B", doses: "3 doses" },
+      { momento: "Conforme histórico", vacina: "dT", doses: "3 doses", obs: "Reforço a cada 10 anos (5 anos se exposição a risco)." },
+      { momento: "Conforme histórico", vacina: "Febre amarela", doses: "1 dose (casos excepcionais)", obs: "Só não vacinados com alto risco de exposição." },
+      { momento: "Conforme histórico", vacina: "Tríplice viral (SCR)", doses: "2 doses", obs: "Só trabalhador de saúde em atuação profissional." },
+      { momento: "Conforme histórico", vacina: "Varicela", doses: "2 doses", obs: "Só trabalhadores da saúde e povos indígenas." },
+      { momento: "Conforme histórico", vacina: "Pneumocócica 20-valente", doses: "1 dose", obs: "Não vacinados acamados/institucionalizados e povos indígenas." },
+      { momento: "Anual", vacina: "Influenza (trivalente)", doses: "1 dose por temporada" },
+      { momento: "Semestral", vacina: "Covid-19", doses: "1 dose a cada 6 meses" },
+    ],
+  },
+  {
+    grupo: "gestante",
+    titulo: "Gestante",
+    faixaEtaria: "durante a gestação",
+    itens: [
+      { momento: "Ao saber da gravidez", vacina: "Hepatite B", doses: "3 doses" },
+      { momento: "Ao saber da gravidez", vacina: "dT", doses: "3 doses" },
+      { momento: "Ao saber da gravidez", vacina: "Influenza (trivalente)", doses: "1 dose por temporada" },
+      { momento: "Ao saber da gravidez", vacina: "Covid-19", doses: "1 dose por gestação" },
+      { momento: "Ao saber da gravidez", vacina: "Febre amarela", doses: "1 dose (casos excepcionais)", obs: "Só sem esquema completo e com risco de exposição." },
+      { momento: "A partir da 20ª semana", vacina: "dTpa", doses: "1 dose por gestação", obs: "Protege também o bebê nos primeiros meses de vida." },
+      { momento: "A partir da 28ª semana", vacina: "Vírus sincicial respiratório (VSR)", doses: "1 dose por gestação", obs: "Protege também o bebê nos primeiros meses de vida." },
+    ],
+  },
+];

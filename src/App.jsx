@@ -14,6 +14,7 @@ import Pacientes from "./pages/Pacientes";
 import Atendimento from "./pages/Atendimento";
 import IAClinica from "./pages/IAClinica";
 import NotasFiscais from "./pages/NotasFiscais";
+import NfseMonitor from "./pages/NfseMonitor";
 import Config from "./pages/Config";
 import Financeiro from "./pages/Financeiro";
 import Relatorios from "./pages/Relatorios";
@@ -52,6 +53,7 @@ export default function App() {
             <Route path="/atendimento/:pacienteId" element={<Atendimento />} />
             <Route path="/ia" element={<IAClinica />} />
             <Route path="/notas-fiscais" element={<NotasFiscais />} />
+            <Route path="/notas-fiscais/monitor" element={<NfseMonitor />} />
             <Route path="/config" element={<Config />} />
             <Route path="/relatorios" element={<Relatorios />} />
             <Route path="/financeiro" element={<Financeiro />} />

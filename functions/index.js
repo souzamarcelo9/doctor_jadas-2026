@@ -711,18 +711,48 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   try {
     const respostaXml = await enviarSoapComCertificado(soapEnvelope, metodo, pfxBuffer, senha);
     logger.info("Prefeitura respondeu (modo teste):", respostaXml.slice(0, 2000));
-    await notaRef.update({ status: "processando", respostaWebservice: respostaXml.slice(0, 5000), enviadoEm: new Date().toISOString() });
-    return { status: "enviado_teste", detalhe: "A Prefeitura respondeu — confira o retorno para ver se o XML passou na validação de schema." };
+    const resumo = extrairResumoXml(respostaXml);
+    await notaRef.update({
+      status: "processando",
+      xmlEnviado: mensagemXml,
+      respostaWebservice: respostaXml,
+      resumoResposta: resumo,
+      enviadoEm: new Date().toISOString(),
+    });
+    return { status: "enviado_teste", detalhe: resumo || "A Prefeitura respondeu — confira o retorno para ver se o XML passou na validação de schema." };
   } catch (err) {
     const provavelmenteTls = /certificate|SSL|TLS|handshake/i.test(err.message || "");
     const detalhe = provavelmenteTls
       ? "Conexão rejeitada na validação do certificado — esperado com certificado autoassinado. Funcionará normalmente com o certificado ICP-Brasil real."
       : `Falha ao enviar: ${err.message}`;
     logger.warn("Envio à Prefeitura falhou:", err.message);
-    await notaRef.update({ status: "erro_certificado", erroWebservice: detalhe, tentadoEm: new Date().toISOString() });
+    await notaRef.update({ status: "erro_certificado", xmlEnviado: mensagemXml, erroWebservice: detalhe, tentadoEm: new Date().toISOString() });
     return { status: "rejeitado_certificado", detalhe };
   }
 });
+
+/** Tenta extrair uma mensagem de erro/status legível de dentro do XML de
+ * retorno da Prefeitura, procurando pelas tags mais comuns de erro/sucesso
+ * do webservice (o schema exato varia conforme o tipo de retorno). Isso
+ * alimenta o "resumo" mostrado no painel de monitoramento — o XML
+ * completo sempre fica disponível ali também, pra quando o resumo não for
+ * suficiente. */
+function extrairResumoXml(xml) {
+  const tentativas = [
+    /<Mensagem>([\s\S]*?)<\/Mensagem>/i,
+    /<Descricao>([\s\S]*?)<\/Descricao>/i,
+    /<ErroMsg>([\s\S]*?)<\/ErroMsg>/i,
+    /<Erro>[\s\S]*?<Descricao>([\s\S]*?)<\/Descricao>/i,
+    /<faultstring>([\s\S]*?)<\/faultstring>/i,
+  ];
+  for (const regex of tentativas) {
+    const m = xml.match(regex);
+    if (m && m[1].trim()) return m[1].trim();
+  }
+  if (/<Erro/i.test(xml) || /<Fault/i.test(xml)) return "A Prefeitura retornou um erro, mas não consegui extrair a mensagem automaticamente — veja o XML completo.";
+  if (/<Nfe>/i.test(xml) || /<ChaveNFe>/i.test(xml)) return "Parece ter sido aceito — encontrei uma tag de NFe/ChaveNFe no retorno.";
+  return null;
+}
 
 function enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha) {
   return new Promise((resolve, reject) => {
@@ -736,7 +766,12 @@ function enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha) {
         headers: {
           "Content-Type": "text/xml; charset=utf-8",
           "Content-Length": Buffer.byteLength(soapEnvelope),
-          SOAPAction: `http://www.prefeitura.sp.gov.br/nfe/${soapAction}`,
+          // O SOAP 1.1 exige que o valor do cabeçalho SOAPAction venha entre
+          // aspas literais — sem elas, servidores ASMX (como este) rejeitam
+          // com "Server did not recognize the value of HTTP Header
+          // SOAPAction". Não é o conteúdo que está errado, são as aspas que
+          // fazem parte do valor do cabeçalho em si.
+          SOAPAction: `"http://www.prefeitura.sp.gov.br/nfe/${soapAction}"`,
         },
         timeout: 20000,
       },

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import Topbar from "../components/Topbar";
-import { Receipt, PlugZap, Send, Clock3, CheckCircle2, AlertTriangle, Loader2, XCircle, Link2 } from "lucide-react";
+import { Receipt, PlugZap, Send, Clock3, CheckCircle2, AlertTriangle, Loader2, XCircle, Link2, Monitor } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
 import { useFirestoreDoc, useFirestoreCollection, criarDocumento, atualizarDocumento } from "../lib/firestore";
 import { nfseEmitir } from "../lib/nfse";
@@ -93,6 +93,12 @@ export default function NotasFiscais() {
     <div className="flex-1 flex flex-col min-w-0">
       <Topbar title="Notas Fiscais" />
       <main className="flex-1 p-4 lg:p-6 space-y-4">
+        <div className="flex justify-end">
+          <a href="/notas-fiscais/monitor" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg focus-ring">
+            <Monitor size={13} /> Abrir monitor de emissões (nova aba)
+          </a>
+        </div>
+
         <div className="card p-4 flex items-start gap-3 bg-brand-50/40 border-brand-100">
           <PlugZap size={18} className="text-brand-600 mt-0.5 shrink-0" />
           <div className="text-xs text-ink-700">

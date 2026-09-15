@@ -43,6 +43,7 @@ export default function NotasFiscais() {
       const notaRef = await criarDocumento(`clinicas/${clinicaId}/notasFiscais`, {
         tomador: form.tomador, cpfCnpj: form.cpfCnpj, codigoServico: form.codigoServico,
         valor: Number(form.valor), aliquota: form.aliquota, discriminacao: form.discriminacao,
+        tipoAtendimento: form.tipoAtendimento,
         status: "pendente",
       });
 

@@ -6,6 +6,7 @@ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestor
 const https = require("node:https");
 const crypto = require("node:crypto");
 const forge = require("node-forge");
+const axios = require("axios");
 const { SecretManagerServiceClient } = require("@google-cloud/secret-manager");
 
 initializeApp();
@@ -696,20 +697,29 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
 </PedidoEnvioLoteRPS>`;
 
   const metodo = NFSE_MODO_TESTE ? "TesteEnvioLoteRPS" : "EnvioLoteRPS";
+  // Confirmado por relato de terceiros que já integraram com sucesso: a
+  // Prefeitura de SP usa SOAP 1.1 de verdade (meu palpite anterior de SOAP
+  // 1.2, baseado numa linha da tabela do manual, estava errado — o
+  // faultcode "soap:Client" que recebemos já era um indício disso, já que
+  // é a nomenclatura de erro do SOAP 1.1). O valor de soapAction abaixo é
+  // o mesmo que o próprio servidor ecoou de volta no fault, então esse
+  // valor específico já está confirmado empiricamente.
+  const soapAction = `http://www.prefeitura.sp.gov.br/nfe/${metodo}`;
   const soapEnvelope = `<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <${metodo}Request xmlns="http://www.prefeitura.sp.gov.br/nfe">
-      <VersaoSchema>2</VersaoSchema>
-      <MensagemXML><![CDATA[${mensagemXml}]]></MensagemXML>
-    </${metodo}Request>
-  </soap:Body>
-</soap:Envelope>`;
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:nfe="http://www.prefeitura.sp.gov.br/nfe">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <nfe:${metodo}Request>
+      <nfe:VersaoSchema>2</nfe:VersaoSchema>
+      <nfe:MensagemXML><![CDATA[${mensagemXml}]]></nfe:MensagemXML>
+    </nfe:${metodo}Request>
+  </soapenv:Body>
+</soapenv:Envelope>`;
 
   const notaRef = db.doc(`clinicas/${clinicaId}/notasFiscais/${notaFiscalId}`);
 
   try {
-    const respostaXml = await enviarSoapComCertificado(soapEnvelope, metodo, pfxBuffer, senha);
+    const respostaXml = await enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha);
     logger.info("Prefeitura respondeu (modo teste):", respostaXml.slice(0, 2000));
     const resumo = extrairResumoXml(respostaXml);
     await notaRef.update({
@@ -744,6 +754,9 @@ function extrairResumoXml(xml) {
     /<ErroMsg>([\s\S]*?)<\/ErroMsg>/i,
     /<Erro>[\s\S]*?<Descricao>([\s\S]*?)<\/Descricao>/i,
     /<faultstring>([\s\S]*?)<\/faultstring>/i,
+    // Formato de Fault do SOAP 1.2 (diferente do faultstring/faultcode do
+    // SOAP 1.1) — o texto legível fica dentro de <Reason><Text>.
+    /<(?:\w+:)?Text[^>]*>([\s\S]*?)<\/(?:\w+:)?Text>/i,
   ];
   for (const regex of tentativas) {
     const m = xml.match(regex);
@@ -754,38 +767,37 @@ function extrairResumoXml(xml) {
   return null;
 }
 
-function enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha) {
-  return new Promise((resolve, reject) => {
-    const req = https.request(
-      {
-        host: NFSE_WSDL_HOST,
-        path: NFSE_WSDL_PATH,
-        method: "POST",
-        pfx: pfxBuffer,
-        passphrase: senha,
-        headers: {
-          "Content-Type": "text/xml; charset=utf-8",
-          "Content-Length": Buffer.byteLength(soapEnvelope),
-          // O SOAP 1.1 exige que o valor do cabeçalho SOAPAction venha entre
-          // aspas literais — sem elas, servidores ASMX (como este) rejeitam
-          // com "Server did not recognize the value of HTTP Header
-          // SOAPAction". Não é o conteúdo que está errado, são as aspas que
-          // fazem parte do valor do cabeçalho em si.
-          SOAPAction: `"http://www.prefeitura.sp.gov.br/nfe/${soapAction}"`,
-        },
-        timeout: 20000,
+// Usa axios (em vez do módulo https nativo do Node) pra montar e enviar a
+// requisição — são implementações HTTP diferentes por baixo dos panos, e
+// isso pode fazer diferença com servidores ASMX antigos que são sensíveis a
+// detalhes de baixo nível (ordem de cabeçalhos, keep-alive, negociação
+// Expect/100-continue) que o cliente nativo do Node lida de um jeito e o
+// axios de outro.
+async function enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha) {
+  const agent = new https.Agent({ pfx: pfxBuffer, passphrase: senha });
+  try {
+    const resposta = await axios.post(`https://${NFSE_WSDL_HOST}${NFSE_WSDL_PATH}`, soapEnvelope, {
+      httpsAgent: agent,
+      headers: {
+        "Content-Type": "text/xml; charset=utf-8",
+        // SOAP 1.1 exige o valor entre aspas literais — sem elas, alguns
+        // servidores ASMX rejeitam com "did not recognize the value of
+        // HTTP Header SOAPAction". As aspas fazem parte do valor do
+        // cabeçalho em si, não são só formatação visual.
+        SOAPAction: `"${soapAction}"`,
       },
-      (res) => {
-        let corpo = "";
-        res.on("data", (chunk) => (corpo += chunk));
-        res.on("end", () => resolve(corpo));
-      }
-    );
-    req.on("timeout", () => req.destroy(new Error("Tempo esgotado ao conectar com a Prefeitura.")));
-    req.on("error", reject);
-    req.write(soapEnvelope);
-    req.end();
-  });
+      timeout: 20000,
+      // Um Fault SOAP costuma vir com HTTP 500 — isso não é uma falha de
+      // rede, é uma resposta válida que a gente precisa ler (não descartar
+      // como exceção).
+      validateStatus: () => true,
+      transformResponse: (data) => data, // mantém a resposta como XML cru, sem tentar interpretar como JSON
+    });
+    return resposta.data;
+  } catch (err) {
+    if (err.code === "ECONNABORTED") throw new Error("Tempo esgotado ao conectar com a Prefeitura.");
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------

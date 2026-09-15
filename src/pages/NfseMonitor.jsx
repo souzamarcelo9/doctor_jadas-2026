@@ -1,8 +1,9 @@
 import { useState } from "react";
 import Topbar from "../components/Topbar";
-import { Receipt, CheckCircle2, Clock3, XCircle, Copy, Check, AlertTriangle } from "lucide-react";
+import { Receipt, CheckCircle2, Clock3, XCircle, Copy, Check, AlertTriangle, RefreshCcw, Loader2 } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
-import { useFirestoreCollection } from "../lib/firestore";
+import { useFirestoreCollection, useFirestoreDoc } from "../lib/firestore";
+import { nfseEmitir } from "../lib/nfse";
 
 const statusTone = {
   autorizada: { label: "Autorizada", tone: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
@@ -13,6 +14,7 @@ const statusTone = {
 
 export default function NfseMonitor() {
   const { clinicaId } = useTenant();
+  const { data: clinica } = useFirestoreDoc("clinicas", clinicaId);
   const { data: notas, loading } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/notasFiscais` : null, "criadoEm", "desc");
   const [selecionadaId, setSelecionadaId] = useState(null);
 
@@ -61,7 +63,7 @@ export default function NfseMonitor() {
           {!selecionada ? (
             <div className="card p-8 text-center text-sm text-ink-500">Selecione uma tentativa na lista ao lado.</div>
           ) : (
-            <DetalheNota nota={selecionada} />
+            <DetalheNota nota={selecionada} clinicaId={clinicaId} clinica={clinica} />
           )}
         </div>
       </main>
@@ -69,8 +71,37 @@ export default function NfseMonitor() {
   );
 }
 
-function DetalheNota({ nota }) {
+function DetalheNota({ nota, clinicaId, clinica }) {
   const st = statusTone[nota.status] || statusTone.pendente;
+  const [reenviando, setReenviando] = useState(false);
+  const [erroReenvio, setErroReenvio] = useState("");
+
+  async function reenviar() {
+    setErroReenvio("");
+    setReenviando(true);
+    try {
+      await nfseEmitir(clinicaId, nota.id, {
+        cnpjPrestador: clinica?.cnpj,
+        inscricaoMunicipalPrestador: clinica?.inscricaoMunicipal,
+        cpfCnpjTomador: nota.cpfCnpj,
+        razaoSocialTomador: nota.tomador,
+        valorServicos: Number(nota.valor),
+        codigoServico: nota.codigoServico,
+        aliquota: Number(nota.aliquota),
+        discriminacao: nota.discriminacao,
+        tipoAtendimento: nota.tipoAtendimento || "presencial",
+      });
+      // Não precisa atualizar estado manualmente — o próprio documento no
+      // Firestore muda (a Cloud Function sobrescreve status/XML/resumo), e
+      // como a leitura aqui é em tempo real (onSnapshot), a tela atualiza
+      // sozinha assim que a resposta chegar.
+    } catch (err) {
+      console.error("Erro ao reenviar nota:", err);
+      setErroReenvio(err.message || "Não foi possível reenviar. Tente novamente.");
+    } finally {
+      setReenviando(false);
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -83,8 +114,16 @@ function DetalheNota({ nota }) {
               Cód. serviço {nota.codigoServico || "—"}
             </div>
           </div>
-          <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${st.tone}`}>{st.label}</span>
+          <div className="flex items-center gap-2">
+            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${st.tone}`}>{st.label}</span>
+            {nota.status !== "autorizada" && (
+              <button onClick={reenviar} disabled={reenviando} className="flex items-center gap-1.5 text-xs font-semibold bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white px-3 py-1.5 rounded-lg focus-ring">
+                {reenviando ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />} Reenviar esta nota
+              </button>
+            )}
+          </div>
         </div>
+        {erroReenvio && <p className="text-xs text-rose-600 mt-2">{erroReenvio}</p>}
       </div>
 
       {nota.resumoResposta && (

@@ -705,7 +705,7 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   // o mesmo que o próprio servidor ecoou de volta no fault, então esse
   // valor específico já está confirmado empiricamente.
   const soapAction = `http://www.prefeitura.sp.gov.br/nfe/${metodo}`;
-  const soapEnvelope = `<?xml version="1.0" encoding="utf-8"?>
+ /*  const soapEnvelope = `<?xml version="1.0" encoding="utf-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:nfe="http://www.prefeitura.sp.gov.br/nfe">
   <soapenv:Header/>
   <soapenv:Body>
@@ -713,6 +713,16 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
       <nfe:VersaoSchema>2</nfe:VersaoSchema>
       <nfe:MensagemXML><![CDATA[${mensagemXml}]]></nfe:MensagemXML>
     </nfe:${metodo}Request>
+  </soapenv:Body>
+</soapenv:Envelope>`; */
+ const soapEnvelope = `<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:nfe="http://www.prefeitura.sp.gov.br/nfe">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <nfe:${metodo}>
+      <nfe:VersaoSchema>2</nfe:VersaoSchema>
+      <nfe:MensagemXML><![CDATA[${mensagemXml}]]></nfe:MensagemXML>
+    </nfe:${metodo}>
   </soapenv:Body>
 </soapenv:Envelope>`;
 

@@ -539,12 +539,15 @@ function montarXmlRps(rps, assinatura) {
     tagCpfCnpjTomador = `<NaoNIF>${rps.naoNifTomador ?? 0}</NaoNIF>`;
   }
 
-  // Ordem dos elementos confirmada contra um XML real, processado com
-  // sucesso pela Prefeitura (fornecido pelo usuário) — os campos novos da
-  // Reforma Tributária (ValorIPI em diante) vêm DEPOIS de Discriminacao,
-  // não misturados no meio dos campos da v1. XSD é rígido quanto a isso.
+  // Ordem e presença de campos confirmadas contra os exemplos oficiais
+  // publicados no site da Prefeitura (PedidoEnvioLoteRPS_exemplo.xml,
+  // schemas-reformatributaria-v02-5): ValorPIS/COFINS/INSS/IR/CSLL viraram
+  // obrigatórios (1-1) na v2 mesmo sem retenção (zerados); ValorFinalCobrado
+  // vem DEPOIS de Discriminacao, junto com os outros campos novos da
+  // reforma; e o elemento <RPS> reseta o namespace pra vazio (xmlns=""),
+  // já que só a tag raiz <PedidoEnvioLoteRPS> carrega o namespace.
   return `
-    <RPS>
+    <RPS xmlns="">
       <Assinatura>${assinatura}</Assinatura>
       <ChaveRPS>
         <InscricaoPrestador>${rps.inscricaoMunicipalPrestador}</InscricaoPrestador>
@@ -555,16 +558,22 @@ function montarXmlRps(rps, assinatura) {
       <DataEmissao>${rps.dataEmissao}</DataEmissao>
       <StatusRPS>N</StatusRPS>
       <TributacaoRPS>${rps.tipoTributacao}</TributacaoRPS>
-      <ValorFinalCobrado>${rps.valorFinalCobrado.toFixed(2)}</ValorFinalCobrado>
       <ValorDeducoes>${(rps.valorDeducoes || 0).toFixed(2)}</ValorDeducoes>
+      <ValorPIS>0.00</ValorPIS>
+      <ValorCOFINS>0.00</ValorCOFINS>
+      <ValorINSS>0.00</ValorINSS>
+      <ValorIR>0.00</ValorIR>
+      <ValorCSLL>0.00</ValorCSLL>
       <CodigoServico>${rps.codigoServico}</CodigoServico>
       <AliquotaServicos>${rps.aliquota}</AliquotaServicos>
       <ISSRetido>${rps.issRetido ? "true" : "false"}</ISSRetido>
       <CPFCNPJTomador>${tagCpfCnpjTomador}</CPFCNPJTomador>
       ${rps.razaoSocialTomador ? `<RazaoSocialTomador>${esc(rps.razaoSocialTomador)}</RazaoSocialTomador>` : ""}
       <Discriminacao>${esc(rps.discriminacao)}</Discriminacao>
+      <ValorFinalCobrado>${rps.valorFinalCobrado.toFixed(2)}</ValorFinalCobrado>
       <ValorIPI>0.00</ValorIPI>
       <ExigibilidadeSuspensa>0</ExigibilidadeSuspensa>
+      <PagamentoParceladoAntecipado>0</PagamentoParceladoAntecipado>
       <NBS>${rps.nbs}</NBS>
       <cLocPrestacao>${rps.codigoMunicipioPrestacao}</cLocPrestacao>
       <IBSCBS>
@@ -675,56 +684,50 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   // certificado ICP-Brasil real para ter qualquer valor prático de testar.
   // Fica marcado como próximo passo quando o certificado real chegar.
   //
-  // Versao="2" em ambos os lugares (Cabecalho e VersaoSchema) é obrigatório
-  // pro layout da Reforma Tributária — confirmado no changelog do manual
-  // v3.3.7 ("Orientações: no cabeçalho, o campo 'Versao' deverá ser igual
-  // a 2"). Mantive ValorTotalServicos/ValorTotalDeducoes no Cabecalho: o
-  // changelog só menciona a remoção desses dois campos para o serviço
-  // ASSÍNCRONO (PedidoEnvioLoteRPSAsync) — não achei confirmação de que
-  // valha também pro síncrono que usamos aqui, então mantive por segurança.
+  // Estrutura confirmada contra os exemplos oficiais publicados no site da
+  // Prefeitura (PedidoEnvioLoteRPS_exemplo.xml, schemas-reformatributaria-
+  // v02-5): Versao="2" fica SÓ no Cabecalho, não também na tag raiz;
+  // ValorTotalServicos/ValorTotalDeducoes realmente não existem no
+  // Cabecalho da v2 (confirmado, não é mais suposição); e Cabecalho/RPS
+  // resetam o namespace pra vazio (xmlns="") — só a tag raiz
+  // <PedidoEnvioLoteRPS> carrega o namespace de verdade.
   const mensagemXml = `<?xml version="1.0" encoding="utf-8"?>
-<PedidoEnvioLoteRPS xmlns="http://www.prefeitura.sp.gov.br/nfe" Versao="2">
-  <Cabecalho Versao="2">
+<PedidoEnvioLoteRPS xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.prefeitura.sp.gov.br/nfe">
+  <Cabecalho Versao="2" xmlns="">
     <CPFCNPJRemetente><CNPJ>${(dados.cnpjPrestador || "").replace(/\D/g, "")}</CNPJ></CPFCNPJRemetente>
     <transacao>true</transacao>
     <dtInicio>${rps.dataEmissao}</dtInicio>
     <dtFim>${rps.dataEmissao}</dtFim>
     <QtdRPS>1</QtdRPS>
-    <ValorTotalServicos>${rps.valorFinalCobrado.toFixed(2)}</ValorTotalServicos>
-    <ValorTotalDeducoes>0.00</ValorTotalDeducoes>
   </Cabecalho>
   ${xmlRps}
 </PedidoEnvioLoteRPS>`;
 
   const metodo = NFSE_MODO_TESTE ? "TesteEnvioLoteRPS" : "EnvioLoteRPS";
-  // Confirmado por relato de terceiros que já integraram com sucesso: a
-  // Prefeitura de SP usa SOAP 1.1 de verdade (meu palpite anterior de SOAP
-  // 1.2, baseado numa linha da tabela do manual, estava errado — o
-  // faultcode "soap:Client" que recebemos já era um indício disso, já que
-  // é a nomenclatura de erro do SOAP 1.1). O valor de soapAction abaixo é
-  // o mesmo que o próprio servidor ecoou de volta no fault, então esse
-  // valor específico já está confirmado empiricamente.
+  // Estrutura do corpo confirmada pela IMAGEM (captura de tela) da seção
+  // "V. Formato das Mensagens SOAP" do manual oficial (PRODAM) — figura
+  // embutida no PDF, só apareceu quando o usuário mandou o PDF e eu
+  // rasterizei a página. Sem <soap:Header/>, sem prefixo "nfe:" — o
+  // namespace vem como default direto na tag <MetodoRequest>.
+  //
+  // Versão do SOAP: voltando pra 1.2 — achei a biblioteca real da Iugu
+  // (empresa de pagamentos brasileira) no GitHub, especificamente pra esse
+  // mesmo endpoint (nfe.prefeitura.sp.gov.br/ws/lotenfe.asmx), usando
+  // Savon com soap_version: 2. A documentação do Savon confirma que pra
+  // SOAP 1.2 ele manda só `Content-Type: application/soap+xml;charset=UTF-8`
+  // — sem cabeçalho SOAPAction separado E sem parâmetro "action" dentro do
+  // Content-Type (diferente da minha primeira tentativa de SOAP 1.2, que
+  // tinha adicionado esse parâmetro por conta própria).
   const soapAction = `http://www.prefeitura.sp.gov.br/nfe/${metodo}`;
- /*  const soapEnvelope = `<?xml version="1.0" encoding="utf-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:nfe="http://www.prefeitura.sp.gov.br/nfe">
-  <soapenv:Header/>
-  <soapenv:Body>
-    <nfe:${metodo}Request>
-      <nfe:VersaoSchema>2</nfe:VersaoSchema>
-      <nfe:MensagemXML><![CDATA[${mensagemXml}]]></nfe:MensagemXML>
-    </nfe:${metodo}Request>
-  </soapenv:Body>
-</soapenv:Envelope>`; */
- const soapEnvelope = `<?xml version="1.0" encoding="utf-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:nfe="http://www.prefeitura.sp.gov.br/nfe">
-  <soapenv:Header/>
-  <soapenv:Body>
-    <nfe:${metodo}>
-      <nfe:VersaoSchema>2</nfe:VersaoSchema>
-      <nfe:MensagemXML><![CDATA[${mensagemXml}]]></nfe:MensagemXML>
-    </nfe:${metodo}>
-  </soapenv:Body>
-</soapenv:Envelope>`;
+  const soapEnvelope = `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+  <soap:Body>
+    <${metodo}Request xmlns="http://www.prefeitura.sp.gov.br/nfe">
+      <VersaoSchema>2</VersaoSchema>
+      <MensagemXML><![CDATA[${mensagemXml}]]></MensagemXML>
+    </${metodo}Request>
+  </soap:Body>
+</soap:Envelope>`;
 
   const notaRef = db.doc(`clinicas/${clinicaId}/notasFiscais/${notaFiscalId}`);
 
@@ -758,6 +761,16 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
  * completo sempre fica disponível ali também, pra quando o resumo não for
  * suficiente. */
 function extrairResumoXml(xml) {
+  // <Sucesso> é o indicador oficial e definitivo em TODO retorno do
+  // webservice (confirmado no manual, item 4.3.1) — mais confiável que
+  // tentar adivinhar por regex de mensagem de erro, então checamos
+  // primeiro.
+  const sucesso = xml.match(/<Sucesso>(true|false)<\/Sucesso>/i);
+  if (sucesso && sucesso[1].toLowerCase() === "true") {
+    const numeroNfe = xml.match(/<NumeroNFe>([\s\S]*?)<\/NumeroNFe>/i);
+    return numeroNfe ? `Sucesso — NF-e nº ${numeroNfe[1].trim()} processada.` : "Sucesso — a Prefeitura confirmou o processamento (Sucesso: true).";
+  }
+
   const tentativas = [
     /<Mensagem>([\s\S]*?)<\/Mensagem>/i,
     /<Descricao>([\s\S]*?)<\/Descricao>/i,
@@ -770,8 +783,9 @@ function extrairResumoXml(xml) {
   ];
   for (const regex of tentativas) {
     const m = xml.match(regex);
-    if (m && m[1].trim()) return m[1].trim();
+    if (m && m[1].trim()) return (sucesso ? "Falhou — " : "") + m[1].trim();
   }
+  if (sucesso) return "A Prefeitura retornou Sucesso: false, mas não consegui extrair a mensagem de erro automaticamente — veja o XML completo.";
   if (/<Erro/i.test(xml) || /<Fault/i.test(xml)) return "A Prefeitura retornou um erro, mas não consegui extrair a mensagem automaticamente — veja o XML completo.";
   if (/<Nfe>/i.test(xml) || /<ChaveNFe>/i.test(xml)) return "Parece ter sido aceito — encontrei uma tag de NFe/ChaveNFe no retorno.";
   return null;
@@ -789,12 +803,12 @@ async function enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, sen
     const resposta = await axios.post(`https://${NFSE_WSDL_HOST}${NFSE_WSDL_PATH}`, soapEnvelope, {
       httpsAgent: agent,
       headers: {
-        "Content-Type": "text/xml; charset=utf-8",
-        // SOAP 1.1 exige o valor entre aspas literais — sem elas, alguns
-        // servidores ASMX rejeitam com "did not recognize the value of
-        // HTTP Header SOAPAction". As aspas fazem parte do valor do
-        // cabeçalho em si, não são só formatação visual.
-        SOAPAction: `"${soapAction}"`,
+        // SOAP 1.2: só Content-Type, sem cabeçalho SOAPAction separado (é
+        // uma convenção exclusiva do SOAP 1.1). Confirmado contra a
+        // constante real do Savon (biblioteca usada em produção pela Iugu
+        // pra esse mesmo endpoint): Content-Type = "application/soap+xml;charset=UTF-8",
+        // sem parâmetro "action" embutido.
+        "Content-Type": "application/soap+xml;charset=UTF-8",
       },
       timeout: 20000,
       // Um Fault SOAP costuma vir com HTTP 500 — isso não é uma falha de

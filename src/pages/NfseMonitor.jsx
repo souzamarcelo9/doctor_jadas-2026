@@ -3,7 +3,7 @@ import Topbar from "../components/Topbar";
 import { Receipt, CheckCircle2, Clock3, XCircle, Copy, Check, AlertTriangle, RefreshCcw, Loader2 } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
 import { useFirestoreCollection, useFirestoreDoc } from "../lib/firestore";
-import { nfseEmitir } from "../lib/nfse";
+import { nfseEmitir, nfseRecalcularStatus } from "../lib/nfse";
 
 const statusTone = {
   autorizada: { label: "Autorizada", tone: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
@@ -24,15 +24,35 @@ export default function NfseMonitor() {
   // direto no render (não precisa de efeito pra isso).
   const idEfetiva = selecionadaId || notas[0]?.id;
   const selecionada = notas.find((n) => n.id === idEfetiva);
+  const [recalculando, setRecalculando] = useState(false);
+  const [msgRecalculo, setMsgRecalculo] = useState("");
+
+  async function handleRecalcularStatus() {
+    setRecalculando(true);
+    setMsgRecalculo("");
+    try {
+      const resultado = await nfseRecalcularStatus(clinicaId);
+      setMsgRecalculo(resultado.atualizadas > 0 ? `${resultado.atualizadas} nota(s) corrigida(s).` : "Tudo já estava certo.");
+    } catch (err) {
+      console.error("Erro ao recalcular status:", err);
+      setMsgRecalculo(err.message || "Não foi possível recalcular.");
+    } finally {
+      setRecalculando(false);
+    }
+  }
 
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <Topbar title="Monitor de NFS-e" />
       <main className="flex-1 p-4 lg:p-6 flex gap-4 min-h-0">
         <div className="w-72 shrink-0 card overflow-hidden flex flex-col">
-          <div className="px-3 py-2.5 border-b border-black/5 text-xs font-semibold text-ink-700 flex items-center gap-1.5">
-            <Receipt size={13} /> Tentativas de emissão
+          <div className="px-3 py-2.5 border-b border-black/5 text-xs font-semibold text-ink-700 flex items-center justify-between gap-1.5">
+            <span className="flex items-center gap-1.5"><Receipt size={13} /> Tentativas de emissão</span>
+            <button onClick={handleRecalcularStatus} disabled={recalculando} title="Recalcula o status de notas antigas a partir da resposta já salva" className="p-1 rounded hover:bg-black/5 text-ink-500 disabled:opacity-50 focus-ring">
+              {recalculando ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />}
+            </button>
           </div>
+          {msgRecalculo && <div className="px-3 py-1.5 text-[10px] text-ink-500 border-b border-black/5">{msgRecalculo}</div>}
           <div className="flex-1 overflow-y-auto divide-y divide-black/5">
             {loading && <div className="p-4 text-xs text-ink-500">Carregando…</div>}
             {!loading && notas.length === 0 && <div className="p-4 text-xs text-ink-500">Nenhuma nota emitida ainda.</div>}

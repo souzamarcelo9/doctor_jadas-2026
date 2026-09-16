@@ -1,6 +1,6 @@
 import { useState } from "react";
 import Topbar from "../components/Topbar";
-import { Receipt, PlugZap, Send, Clock3, CheckCircle2, AlertTriangle, Loader2, XCircle, Link2, Monitor } from "lucide-react";
+import { Receipt, PlugZap, Send, Clock3, CheckCircle2, AlertTriangle, Loader2, XCircle, Link2, Monitor, ChevronLeft, ChevronRight } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
 import { useFirestoreDoc, useFirestoreCollection, criarDocumento, atualizarDocumento } from "../lib/firestore";
 import { nfseEmitir } from "../lib/nfse";
@@ -22,6 +22,11 @@ export default function NotasFiscais() {
   const [resultado, setResultado] = useState(null);
   const [contaVinculadaId, setContaVinculadaId] = useState("");
   const [form, setForm] = useState({ tomador: "", cpfCnpj: "", codigoServico: "", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
+  const [pagina, setPagina] = useState(1);
+  const ITENS_POR_PAGINA = 10;
+  const totalPaginas = Math.max(1, Math.ceil(historico.length / ITENS_POR_PAGINA));
+  const paginaAtual = Math.min(pagina, totalPaginas);
+  const historicoPagina = historico.slice((paginaAtual - 1) * ITENS_POR_PAGINA, paginaAtual * ITENS_POR_PAGINA);
 
   // Se a pessoa ainda não editou o campo nesta sessão, usa o padrão salvo
   // na clínica — sem isso caía sempre no "04030" fixo, ignorando o que foi
@@ -205,7 +210,7 @@ export default function NotasFiscais() {
                 </tr>
               </thead>
               <tbody>
-                {historico.map((n) => {
+                {historicoPagina.map((n) => {
                   const S = statusTone[n.status] || statusTone.pendente;
                   return (
                     <tr key={n.id} className="border-b border-black/5 last:border-0">
@@ -218,6 +223,19 @@ export default function NotasFiscais() {
                 })}
               </tbody>
             </table>
+          )}
+          {!loading && historico.length > ITENS_POR_PAGINA && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-black/5">
+              <span className="text-[11px] text-ink-500">Página {paginaAtual} de {totalPaginas} · {historico.length} notas no total</span>
+              <div className="flex items-center gap-1.5">
+                <button onClick={() => setPagina((p) => Math.max(1, p - 1))} disabled={paginaAtual === 1} className="p-1.5 rounded-lg border border-black/10 text-ink-500 disabled:opacity-40 focus-ring">
+                  <ChevronLeft size={14} />
+                </button>
+                <button onClick={() => setPagina((p) => Math.min(totalPaginas, p + 1))} disabled={paginaAtual === totalPaginas} className="p-1.5 rounded-lg border border-black/10 text-ink-500 disabled:opacity-40 focus-ring">
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
           )}
         </div>
       </main>

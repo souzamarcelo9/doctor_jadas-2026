@@ -29,3 +29,13 @@ export async function nfseEmitir(clinicaId, notaFiscalId, dados) {
   const { data } = await chamar({ clinicaId, notaFiscalId, dados });
   return data; // { status, detalhe }
 }
+
+/** Relê a resposta já salva em cada nota fiscal e recalcula o status
+ * (autorizada/rejeitada) — não faz nenhuma chamada nova à Prefeitura, só
+ * corrige documentos antigos que ficaram presos como "processando". */
+export async function nfseRecalcularStatus(clinicaId) {
+  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
+  const chamar = httpsCallable(functionsInstance, "nfseRecalcularStatus");
+  const { data } = await chamar({ clinicaId });
+  return data; // { ok, atualizadas, total }
+}

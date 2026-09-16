@@ -7,7 +7,8 @@ import EditarUsuarioModal from "../components/EditarUsuarioModal";
 import EquipeModal from "../components/EquipeModal";
 import ConveniosServicosModal from "../components/ConveniosServicosModal";
 import FormulariosTemplateModal from "../components/FormulariosTemplateModal";
-import { SlidersHorizontal, FileSignature, ListTodo, UserCog, FileText, Users, Handshake, FileEdit } from "lucide-react";
+import DadosFiscaisModal from "../components/DadosFiscaisModal";
+import { SlidersHorizontal, FileSignature, ListTodo, UserCog, FileText, Users, Handshake, FileEdit, Landmark } from "lucide-react";
 
 const cards = [
   { icon: SlidersHorizontal, title: "Preferências", desc: "Ajuste suas configurações de trabalho e o layout do prontuário." },
@@ -15,6 +16,7 @@ const cards = [
   { icon: Handshake, title: "Convênios e Serviços", desc: "Cadastre os convênios aceitos e os tipos de serviço com seus valores." },
   { icon: FileEdit, title: "Formulários de Avaliação", desc: "Monte os formulários que sua equipe aplica nos pacientes, com score." },
   { icon: FileSignature, title: "Certificado Digital", desc: "Configure aqui seu certificado digital para assinaturas e NFS-e." },
+  { icon: Landmark, title: "Dados Fiscais", desc: "CNPJ, Inscrição Municipal e códigos usados na emissão de NFS-e." },
   { icon: ListTodo, title: "Lista de Tarefas", desc: "Distribua e controle suas tarefas." },
   { icon: UserCog, title: "Editar Usuário", desc: "Ajuste o seu usuário." },
   { icon: FileText, title: "Termos de Uso", desc: "Termos e condições gerais de uso." },
@@ -28,6 +30,7 @@ export default function Config() {
   const [openEquipe, setOpenEquipe] = useState(false);
   const [openConvenios, setOpenConvenios] = useState(false);
   const [openFormularios, setOpenFormularios] = useState(false);
+  const [openDadosFiscais, setOpenDadosFiscais] = useState(false);
 
   function handleClick(title) {
     if (title === "Preferências") setOpenPref(true);
@@ -37,6 +40,7 @@ export default function Config() {
     if (title === "Lista de Tarefas") navigate("/tarefas");
     if (title === "Convênios e Serviços") setOpenConvenios(true);
     if (title === "Formulários de Avaliação") setOpenFormularios(true);
+    if (title === "Dados Fiscais") setOpenDadosFiscais(true);
   }
 
   return (
@@ -65,6 +69,7 @@ export default function Config() {
       <EquipeModal open={openEquipe} onClose={() => setOpenEquipe(false)} />
       <ConveniosServicosModal open={openConvenios} onClose={() => setOpenConvenios(false)} />
       <FormulariosTemplateModal open={openFormularios} onClose={() => setOpenFormularios(false)} />
+      <DadosFiscaisModal open={openDadosFiscais} onClose={() => setOpenDadosFiscais(false)} />
     </div>
   );
 }

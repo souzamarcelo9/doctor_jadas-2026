@@ -7,6 +7,7 @@ const https = require("node:https");
 const crypto = require("node:crypto");
 const forge = require("node-forge");
 const axios = require("axios");
+const { SignedXml } = require("xml-crypto");
 const { SecretManagerServiceClient } = require("@google-cloud/secret-manager");
 
 initializeApp();
@@ -526,6 +527,42 @@ function assinarRps(rps, privateKeyPem) {
   return sign.sign(privateKeyPem, "base64");
 }
 
+/** Assina digitalmente o <PedidoEnvioLoteRPS> inteiro (assinatura XMLDSig
+ * "enveloped", diferente da assinatura de cada RPS individual calculada
+ * acima) — confirmado como obrigatório pela própria validação de schema da
+ * Prefeitura ("expected 'RPS' as well as 'Signature'"). Usa xml-crypto
+ * (biblioteca padrão do Node.js pra isso) em vez de montar XMLDSig na mão,
+ * já que canonicalização/assinatura XML tem muita pegadinha sutil pra
+ * arriscar reimplementar.
+ *
+ * Algoritmos (RSA-SHA1 + C14N padrão) escolhidos por consistência com o
+ * algoritmo já confirmado funcionando na assinatura de cada RPS — não há
+ * confirmação direta na documentação pública de que são exatamente esses;
+ * se a Prefeitura rejeitar especificamente a assinatura (mensagem de erro
+ * vai mencionar isso explicitamente), o mais provável é precisar trocar
+ * pra RSA-SHA256, que é o padrão mais atual de ICP-Brasil. */
+function assinarPedidoXmlDSig(xmlSemAssinatura, privateKeyPem, certPem) {
+  const sig = new SignedXml({
+    privateKey: privateKeyPem,
+    publicCert: certPem,
+    signatureAlgorithm: "http://www.w3.org/2000/09/xmldsig#rsa-sha1",
+    canonicalizationAlgorithm: "http://www.w3.org/TR/2001/REC-xml-c14n-20010315",
+  });
+  sig.addReference({
+    xpath: "//*[local-name(.)='PedidoEnvioLoteRPS']",
+    transforms: ["http://www.w3.org/2000/09/xmldsig#enveloped-signature", "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"],
+    digestAlgorithm: "http://www.w3.org/2000/09/xmldsig#sha1",
+    // URI="" (referencia o documento inteiro) SEM adicionar atributo Id na
+    // tag raiz — confirmado lendo o código-fonte da xml-crypto, já que o
+    // schema da Prefeitura rejeitou explicitamente esse atributo extra
+    // ("The 'Id' attribute is not declared").
+    uri: "",
+    isEmptyUri: true,
+  });
+  sig.computeSignature(xmlSemAssinatura);
+  return sig.getSignedXml();
+}
+
 function montarXmlRps(rps, assinatura) {
   const esc = (s) =>
     String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
@@ -641,13 +678,16 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   const { pfxBase64, senha } = secretJson;
   const pfxBuffer = Buffer.from(pfxBase64, "base64");
 
-  let privateKeyPem;
+  let privateKeyPem, certPem;
   try {
     const asn1 = forge.asn1.fromDer(forge.util.decode64(pfxBase64));
     const p12 = forge.pkcs12.pkcs12FromAsn1(asn1, false, senha);
     const bagsKey = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
     const keyBag = bagsKey[forge.pki.oids.pkcs8ShroudedKeyBag]?.[0];
     privateKeyPem = forge.pki.privateKeyToPem(keyBag.key);
+    const bagsCert = p12.getBags({ bagType: forge.pki.oids.certBag });
+    const certBag = bagsCert[forge.pki.oids.certBag]?.[0];
+    certPem = forge.pki.certificateToPem(certBag.cert);
   } catch (err) {
     logger.error("Erro ao extrair chave privada do certificado:", err);
     throw new HttpsError("internal", "Certificado configurado está corrompido ou a senha mudou — reimporte em Configurações.");
@@ -707,6 +747,14 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   ${xmlRps}
 </PedidoEnvioLoteRPS>`;
 
+  let mensagemXmlAssinado;
+  try {
+    mensagemXmlAssinado = assinarPedidoXmlDSig(mensagemXml, privateKeyPem, certPem);
+  } catch (err) {
+    logger.error("Erro ao assinar o pedido (XMLDSig):", err);
+    throw new HttpsError("internal", "Não foi possível assinar digitalmente o pedido — confira o certificado configurado.");
+  }
+
   const metodo = NFSE_MODO_TESTE ? "TesteEnvioLoteRPS" : "EnvioLoteRPS";
   // Estrutura do corpo confirmada pela IMAGEM (captura de tela) da seção
   // "V. Formato das Mensagens SOAP" do manual oficial (PRODAM) — figura
@@ -728,7 +776,7 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   <soap:Body>
     <${metodo}Request xmlns="http://www.prefeitura.sp.gov.br/nfe">
       <VersaoSchema>2</VersaoSchema>
-      <MensagemXML><![CDATA[${mensagemXml}]]></MensagemXML>
+      <MensagemXML><![CDATA[${mensagemXmlAssinado}]]></MensagemXML>
     </${metodo}Request>
   </soap:Body>
 </soap:Envelope>`;

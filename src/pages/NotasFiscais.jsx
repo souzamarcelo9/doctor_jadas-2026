@@ -20,7 +20,12 @@ export default function NotasFiscais() {
   const [issuing, setIssuing] = useState(false);
   const [resultado, setResultado] = useState(null);
   const [contaVinculadaId, setContaVinculadaId] = useState("");
-  const [form, setForm] = useState({ tomador: "", cpfCnpj: "", codigoServico: "04030", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
+  const [form, setForm] = useState({ tomador: "", cpfCnpj: "", codigoServico: "", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
+
+  // Se a pessoa ainda não editou o campo nesta sessão, usa o padrão salvo
+  // na clínica — sem isso caía sempre no "04030" fixo, ignorando o que foi
+  // configurado em Configurações → Dados Fiscais.
+  const codigoServicoEfetivo = form.codigoServico || clinica?.codigoServicoPadrao || "04030";
 
   const contasDisponiveis = contasReceber.filter((c) => c.status === "pendente" && !c.notaFiscalId);
 
@@ -41,7 +46,7 @@ export default function NotasFiscais() {
     setResultado(null);
     try {
       const notaRef = await criarDocumento(`clinicas/${clinicaId}/notasFiscais`, {
-        tomador: form.tomador, cpfCnpj: form.cpfCnpj, codigoServico: form.codigoServico,
+        tomador: form.tomador, cpfCnpj: form.cpfCnpj, codigoServico: codigoServicoEfetivo,
         valor: Number(form.valor), aliquota: form.aliquota, discriminacao: form.discriminacao,
         tipoAtendimento: form.tipoAtendimento,
         status: "pendente",
@@ -53,10 +58,12 @@ export default function NotasFiscais() {
         cpfCnpjTomador: form.cpfCnpj,
         razaoSocialTomador: form.tomador,
         valorServicos: Number(form.valor),
-        codigoServico: form.codigoServico,
+        codigoServico: codigoServicoEfetivo,
         aliquota: Number(form.aliquota),
         discriminacao: form.discriminacao,
         tipoAtendimento: form.tipoAtendimento,
+        nbs: clinica?.nbsPadrao,
+        cClassTrib: clinica?.cClassTribPadrao,
       });
       setResultado(resposta);
 
@@ -80,7 +87,7 @@ export default function NotasFiscais() {
         }
       }
 
-      setForm({ tomador: "", cpfCnpj: "", codigoServico: "04030", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
+      setForm({ tomador: "", cpfCnpj: "", codigoServico: "", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
       setContaVinculadaId("");
     } catch (err) {
       console.error("Erro ao emitir NFS-e:", err);
@@ -140,8 +147,8 @@ export default function NotasFiscais() {
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="Tomador do serviço" value={form.tomador} onChange={(v) => setForm({ ...form, tomador: v })} />
               <Field label="CPF/CNPJ" value={form.cpfCnpj} onChange={(v) => setForm({ ...form, cpfCnpj: v })} />
-              <Field label="Código de serviço" value={form.codigoServico} onChange={(v) => setForm({ ...form, codigoServico: v })} />
-              {form.codigoServico === "04030" && (
+              <Field label="Código de serviço" value={codigoServicoEfetivo} onChange={(v) => setForm({ ...form, codigoServico: v })} />
+              {codigoServicoEfetivo === "04030" && (
                 <p className="text-[10px] text-emerald-600 -mt-1.5 col-span-2">✓ 04030 — "Medicina e biomedicina" (PJ), item 4.01, confirmado no Anexo 1 da IN SF/SUREM 08/2011 (atualizado até IN 03/2026).</p>
               )}
               <Field label="Valor do serviço (R$)" type="number" value={form.valor} onChange={(v) => setForm({ ...form, valor: v })} />

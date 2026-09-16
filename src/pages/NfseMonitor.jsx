@@ -90,6 +90,8 @@ function DetalheNota({ nota, clinicaId, clinica }) {
         aliquota: Number(nota.aliquota),
         discriminacao: nota.discriminacao,
         tipoAtendimento: nota.tipoAtendimento || "presencial",
+        nbs: clinica?.nbsPadrao,
+        cClassTrib: clinica?.cClassTribPadrao,
       });
       // Não precisa atualizar estado manualmente — o próprio documento no
       // Firestore muda (a Cloud Function sobrescreve status/XML/resumo), e

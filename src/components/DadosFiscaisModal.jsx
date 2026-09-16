@@ -28,6 +28,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
     codigoServicoPadrao: form.codigoServicoPadrao ?? clinica?.codigoServicoPadrao ?? "04030",
     nbsPadrao: form.nbsPadrao ?? clinica?.nbsPadrao ?? "123012100",
     cClassTribPadrao: form.cClassTribPadrao ?? clinica?.cClassTribPadrao ?? "200029",
+    simplesNacional: form.simplesNacional ?? clinica?.simplesNacional ?? false,
   };
 
   async function salvar() {
@@ -43,6 +44,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
         codigoServicoPadrao: valores.codigoServicoPadrao.trim(),
         nbsPadrao: valores.nbsPadrao.trim(),
         cClassTribPadrao: valores.cClassTribPadrao.trim(),
+        simplesNacional: valores.simplesNacional,
       });
       setSucesso(true);
     } catch (err) {
@@ -86,8 +88,17 @@ export default function DadosFiscaisModal({ open, onClose }) {
                 <span className="text-[11px] text-ink-500">04030 = Medicina e biomedicina (padrão). Só troque se sua clínica tiver um enquadramento diferente.</span>
               </label>
 
+              <label className="flex items-start gap-2.5 bg-amber-50 border border-amber-100 rounded-lg p-3 cursor-pointer">
+                <input type="checkbox" checked={valores.simplesNacional} onChange={(e) => setForm({ ...form, simplesNacional: e.target.checked })} className="mt-0.5 rounded focus-ring" />
+                <span className="text-xs text-amber-800">
+                  <span className="font-semibold block">Clínica optante pelo Simples Nacional</span>
+                  Empresas no Simples Nacional ainda usam o layout antigo (v1) da NFS-e — a Prefeitura rejeita o layout novo (Reforma Tributária/IBS-CBS) pra esse regime. Confirme isso com o contador da clínica se não tiver certeza.
+                </span>
+              </label>
+
               <div className="border-t border-black/5 pt-4">
                 <p className="text-xs font-semibold text-ink-700 mb-2">Reforma Tributária (IBS/CBS)</p>
+                <p className="text-[11px] text-ink-500 mb-2">Só se aplica se a clínica NÃO for Simples Nacional (veja acima).</p>
                 <div className="grid grid-cols-2 gap-3">
                   <label className="block text-xs">
                     <span className="text-ink-500 font-medium">NBS</span>

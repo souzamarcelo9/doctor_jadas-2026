@@ -7,6 +7,7 @@ import { nfseEmitir } from "../lib/nfse";
 
 const statusTone = {
   autorizada: { label: "Autorizada", tone: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
+  rejeitada: { label: "Rejeitada", tone: "bg-rose-100 text-rose-700", icon: XCircle },
   processando: { label: "Processando (teste)", tone: "bg-amber-100 text-amber-700", icon: Clock3 },
   erro_certificado: { label: "Certificado rejeitado", tone: "bg-rose-100 text-rose-700", icon: XCircle },
   pendente: { label: "Pendente", tone: "bg-gray-100 text-gray-500", icon: Clock3 },
@@ -15,7 +16,7 @@ const statusTone = {
 export default function NotasFiscais() {
   const { clinicaId, firebaseConfigured } = useTenant();
   const { data: clinica } = useFirestoreDoc("clinicas", clinicaId);
-  const { data: historico, loading } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/notasFiscais` : null);
+  const { data: historico, loading } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/notasFiscais` : null, "criadoEm", "desc");
   const { data: contasReceber } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/contasReceber` : null);
   const [issuing, setIssuing] = useState(false);
   const [resultado, setResultado] = useState(null);

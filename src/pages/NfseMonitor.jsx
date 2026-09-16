@@ -7,6 +7,7 @@ import { nfseEmitir } from "../lib/nfse";
 
 const statusTone = {
   autorizada: { label: "Autorizada", tone: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
+  rejeitada: { label: "Rejeitada", tone: "bg-rose-100 text-rose-700", icon: XCircle },
   processando: { label: "Processando (teste)", tone: "bg-amber-100 text-amber-700", icon: Clock3 },
   erro_certificado: { label: "Erro no envio", tone: "bg-rose-100 text-rose-700", icon: XCircle },
   pendente: { label: "Pendente", tone: "bg-gray-100 text-gray-500", icon: Clock3 },

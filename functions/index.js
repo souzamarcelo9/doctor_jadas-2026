@@ -491,24 +491,27 @@ exports.nfseSalvarCertificado = onCall({ region: REGION, timeoutSeconds: 30 }, a
 function assinarRps(rps, privateKeyPem) {
   const pad = (v, n) => String(v).padStart(n, "0");
   const padRight = (v, n) => String(v).padEnd(n, " ");
+  const v2 = rps.layoutVersao !== 1;
 
   // Indicador de CPF/CNPJ/NIF do tomador: 1=CPF, 2=CNPJ, 3=não informado, 4=NIF.
+  // NIF/NaoNIF só existem no layout v2 (Reforma Tributária) — no v1 as
+  // únicas opções são CPF, CNPJ ou não informado.
   let indicadorTomador = "3";
   let cpfCnpjTomadorNumerico = "0".repeat(14);
   let sufixoNif = "";
   if (rps.cpfCnpjTomador) {
     indicadorTomador = rps.cpfCnpjTomador.length === 11 ? "1" : "2";
     cpfCnpjTomadorNumerico = pad(rps.cpfCnpjTomador, 14);
-  } else if (rps.nifTomador) {
+  } else if (v2 && rps.nifTomador) {
     indicadorTomador = "4";
     sufixoNif = rps.nifTomador.slice(0, 40);
-  } else if (rps.naoNifTomador !== undefined && rps.naoNifTomador !== null) {
+  } else if (v2 && rps.naoNifTomador !== undefined && rps.naoNifTomador !== null) {
     indicadorTomador = "4";
     sufixoNif = String(rps.naoNifTomador);
   }
 
   const cadeia =
-    pad(rps.inscricaoMunicipalPrestador, 12) +
+    pad(rps.inscricaoMunicipalPrestador, v2 ? 12 : 8) +
     padRight(rps.serie || "UNICA", 5) +
     pad(rps.numero, 12) +
     rps.dataEmissao.replace(/-/g, "") + // AAAAMMDD
@@ -566,25 +569,21 @@ function assinarPedidoXmlDSig(xmlSemAssinatura, privateKeyPem, certPem) {
 function montarXmlRps(rps, assinatura) {
   const esc = (s) =>
     String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+  const v2 = rps.layoutVersao !== 1;
 
   let tagCpfCnpjTomador;
   if (rps.cpfCnpjTomador) {
     tagCpfCnpjTomador = rps.cpfCnpjTomador.length === 11 ? `<CPF>${rps.cpfCnpjTomador}</CPF>` : `<CNPJ>${rps.cpfCnpjTomador}</CNPJ>`;
-  } else if (rps.nifTomador) {
+  } else if (v2 && rps.nifTomador) {
     tagCpfCnpjTomador = `<NIF>${esc(rps.nifTomador)}</NIF>`;
-  } else {
+  } else if (v2) {
     tagCpfCnpjTomador = `<NaoNIF>${rps.naoNifTomador ?? 0}</NaoNIF>`;
+  } else {
+    tagCpfCnpjTomador = "";
   }
 
-  // Ordem e presença de campos confirmadas contra os exemplos oficiais
-  // publicados no site da Prefeitura (PedidoEnvioLoteRPS_exemplo.xml,
-  // schemas-reformatributaria-v02-5): ValorPIS/COFINS/INSS/IR/CSLL viraram
-  // obrigatórios (1-1) na v2 mesmo sem retenção (zerados); ValorFinalCobrado
-  // vem DEPOIS de Discriminacao, junto com os outros campos novos da
-  // reforma; e o elemento <RPS> reseta o namespace pra vazio (xmlns=""),
-  // já que só a tag raiz <PedidoEnvioLoteRPS> carrega o namespace.
-  return `
-    <RPS xmlns="">
+  // Campos comuns aos dois layouts (v1 e v2).
+  const camposComuns = `
       <Assinatura>${assinatura}</Assinatura>
       <ChaveRPS>
         <InscricaoPrestador>${rps.inscricaoMunicipalPrestador}</InscricaoPrestador>
@@ -594,7 +593,34 @@ function montarXmlRps(rps, assinatura) {
       <TipoRPS>RPS</TipoRPS>
       <DataEmissao>${rps.dataEmissao}</DataEmissao>
       <StatusRPS>N</StatusRPS>
-      <TributacaoRPS>${rps.tipoTributacao}</TributacaoRPS>
+      <TributacaoRPS>${rps.tipoTributacao}</TributacaoRPS>`;
+
+  if (!v2) {
+    // Layout v1 — obrigatório pra contribuintes Simples Nacional, que a
+    // Prefeitura ainda não habilitou pro layout da Reforma Tributária
+    // (confirmado por erro real do webservice: "Contribuinte cadastrado
+    // como Simples Nacional... Deverá ser utilizado o leiaute 1").
+    return `
+    <RPS xmlns="">${camposComuns}
+      <ValorServicos>${rps.valorFinalCobrado.toFixed(2)}</ValorServicos>
+      <ValorDeducoes>${(rps.valorDeducoes || 0).toFixed(2)}</ValorDeducoes>
+      <CodigoServico>${rps.codigoServico}</CodigoServico>
+      <AliquotaServicos>${rps.aliquota}</AliquotaServicos>
+      <ISSRetido>${rps.issRetido ? "true" : "false"}</ISSRetido>
+      <CPFCNPJTomador>${tagCpfCnpjTomador}</CPFCNPJTomador>
+      ${rps.razaoSocialTomador ? `<RazaoSocialTomador>${esc(rps.razaoSocialTomador)}</RazaoSocialTomador>` : ""}
+      <Discriminacao>${esc(rps.discriminacao)}</Discriminacao>
+    </RPS>`.trim();
+  }
+
+  // Layout v2 (Reforma Tributária) — ordem e presença de campos
+  // confirmadas contra os exemplos oficiais publicados no site da
+  // Prefeitura (PedidoEnvioLoteRPS_exemplo.xml, schemas-reformatributaria-
+  // v02-5): ValorPIS/COFINS/INSS/IR/CSLL viraram obrigatórios (1-1) mesmo
+  // sem retenção (zerados); ValorFinalCobrado vem DEPOIS de Discriminacao,
+  // junto com os outros campos novos da reforma.
+  return `
+    <RPS xmlns="">${camposComuns}
       <ValorDeducoes>${(rps.valorDeducoes || 0).toFixed(2)}</ValorDeducoes>
       <ValorPIS>0.00</ValorPIS>
       <ValorCOFINS>0.00</ValorCOFINS>
@@ -610,7 +636,6 @@ function montarXmlRps(rps, assinatura) {
       <ValorFinalCobrado>${rps.valorFinalCobrado.toFixed(2)}</ValorFinalCobrado>
       <ValorIPI>0.00</ValorIPI>
       <ExigibilidadeSuspensa>0</ExigibilidadeSuspensa>
-      <PagamentoParceladoAntecipado>0</PagamentoParceladoAntecipado>
       <NBS>${rps.nbs}</NBS>
       <cLocPrestacao>${rps.codigoMunicipioPrestacao}</cLocPrestacao>
       <IBSCBS>
@@ -652,10 +677,6 @@ function montarXmlRps(rps, assinatura) {
  * Saída:    { status: "enviado_teste" | "rejeitado_certificado" | "erro", detalhe }
  */
 exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (request) => {
-  // Canário de deploy: se essa linha não aparecer nos logs depois de um
-  // teste, o código publicado NÃO é o que a gente acabou de mandar —
-  // ponto final, sem mais achismo de protocolo até isso ficar provado.
-  logger.info("### CANARIO nfseEmitir rodada-31-soap12-savon", new Date().toISOString());
   if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
   const { clinicaId, notaFiscalId, dados } = request.data || {};
   if (!clinicaId || !notaFiscalId || !dados) {
@@ -667,6 +688,11 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   if (!certInfo || certInfo.status !== "configurado") {
     throw new HttpsError("failed-precondition", "Nenhum certificado digital configurado para esta clínica. Configure em Configurações → Certificado Digital.");
   }
+  // Contribuintes do Simples Nacional ainda usam o layout v1 (sem os campos
+  // da Reforma Tributária/IBS-CBS) — a Prefeitura rejeita o layout v2 pra
+  // esse regime, confirmado por erro real do webservice ("Contribuinte
+  // cadastrado como Simples Nacional... Deverá ser utilizado o leiaute 1").
+  const layoutVersao = clinicaSnap.data()?.simplesNacional ? 1 : 2;
 
   let secretJson;
   try {
@@ -697,6 +723,7 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   const cIndOp = tipoAtendimento === "teleconsulta" ? CIND_OP.teleconsulta : tipoAtendimento === "domiciliar" ? CIND_OP.domiciliar : CIND_OP.presencial;
 
   const rps = {
+    layoutVersao,
     inscricaoMunicipalPrestador: (dados.inscricaoMunicipalPrestador || "").replace(/\D/g, "") || "000000000000",
     numero: dados.numeroRps || Date.now() % 1e12,
     serie: "UNICA",
@@ -722,27 +749,23 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   const assinatura = assinarRps(rps, privateKeyPem);
   const xmlRps = montarXmlRps(rps, assinatura);
 
-  // ⚠️ A tag <Signature> da mensagem XML completa (assinatura XMLDSig do
-  // PEDIDO, distinta da assinatura do RPS acima) não está implementada
-  // aqui — depende de uma biblioteca de XMLDSig (ex.: xml-crypto) e do
-  // certificado ICP-Brasil real para ter qualquer valor prático de testar.
-  // Fica marcado como próximo passo quando o certificado real chegar.
-  //
   // Estrutura confirmada contra os exemplos oficiais publicados no site da
   // Prefeitura (PedidoEnvioLoteRPS_exemplo.xml, schemas-reformatributaria-
-  // v02-5): Versao="2" fica SÓ no Cabecalho, não também na tag raiz;
+  // v02-5): Versao fica SÓ no Cabecalho, não também na tag raiz;
   // ValorTotalServicos/ValorTotalDeducoes realmente não existem no
-  // Cabecalho da v2 (confirmado, não é mais suposição); e Cabecalho/RPS
+  // Cabecalho (confirmado, não é mais suposição); e Cabecalho/RPS
   // resetam o namespace pra vazio (xmlns="") — só a tag raiz
   // <PedidoEnvioLoteRPS> carrega o namespace de verdade.
   const mensagemXml = `<?xml version="1.0" encoding="utf-8"?>
 <PedidoEnvioLoteRPS xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.prefeitura.sp.gov.br/nfe">
-  <Cabecalho Versao="2" xmlns="">
+  <Cabecalho Versao="${layoutVersao}" xmlns="">
     <CPFCNPJRemetente><CNPJ>${(dados.cnpjPrestador || "").replace(/\D/g, "")}</CNPJ></CPFCNPJRemetente>
     <transacao>true</transacao>
     <dtInicio>${rps.dataEmissao}</dtInicio>
     <dtFim>${rps.dataEmissao}</dtFim>
-    <QtdRPS>1</QtdRPS>
+    <QtdRPS>1</QtdRPS>${layoutVersao === 1 ? `
+    <ValorTotalServicos>${rps.valorFinalCobrado.toFixed(2)}</ValorTotalServicos>
+    <ValorTotalDeducoes>${(rps.valorDeducoes || 0).toFixed(2)}</ValorTotalDeducoes>` : ""}
   </Cabecalho>
   ${xmlRps}
 </PedidoEnvioLoteRPS>`;
@@ -775,7 +798,7 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
 <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
   <soap:Body>
     <${metodo}Request xmlns="http://www.prefeitura.sp.gov.br/nfe">
-      <VersaoSchema>2</VersaoSchema>
+      <VersaoSchema>${layoutVersao}</VersaoSchema>
       <MensagemXML><![CDATA[${mensagemXmlAssinado}]]></MensagemXML>
     </${metodo}Request>
   </soap:Body>
@@ -784,12 +807,16 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   const notaRef = db.doc(`clinicas/${clinicaId}/notasFiscais/${notaFiscalId}`);
 
   try {
-    logger.info("### CANARIO enviando agora — host:", NFSE_WSDL_HOST, NFSE_WSDL_PATH, "| método:", metodo, "| envelope completo:", soapEnvelope);
     const respostaXml = await enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha);
     logger.info("Prefeitura respondeu (modo teste):", respostaXml.slice(0, 2000));
     const resumo = extrairResumoXml(respostaXml);
+    // <Sucesso> é o indicador oficial e definitivo do próprio webservice —
+    // usamos ele pra decidir o status final, não mais um "processando"
+    // genérico que não dizia se deu certo ou não.
+    const sucessoMatch = respostaXml.match(/<Sucesso>(true|false)<\/Sucesso>/i);
+    const status = sucessoMatch?.[1]?.toLowerCase() === "true" ? "autorizada" : sucessoMatch ? "rejeitada" : "processando";
     await notaRef.update({
-      status: "processando",
+      status,
       xmlEnviado: mensagemXml,
       respostaWebservice: respostaXml,
       resumoResposta: resumo,
@@ -1555,4 +1582,38 @@ exports.recalcularTodosOsClaims = onCall({ region: REGION, timeoutSeconds: 120 }
   }
 
   return { ok: true, usuariosAtualizados };
+});
+
+// ---------------------------------------------------------------------
+// Correção retroativa: recalcular o status de notas fiscais já emitidas
+// ---------------------------------------------------------------------
+// Antes de uma certa rodada, nfseEmitir sempre gravava status:"processando"
+// (não sabíamos ainda interpretar com confiança o <Sucesso> da resposta).
+// Isso deixou notas já aprovadas (ou já rejeitadas) presas com essa
+// etiqueta genérica pra sempre, já que só atualizamos o status no momento
+// do envio — sem isso, um documento antigo nunca se corrige sozinho.
+//
+// Esta função relê o `respostaWebservice` que já está salvo em cada nota
+// (não faz nenhuma chamada nova à Prefeitura) e recalcula o status a
+// partir do <Sucesso> real. Idempotente, seguro rodar quantas vezes quiser.
+exports.nfseRecalcularStatus = onCall({ region: REGION, timeoutSeconds: 120 }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId } = request.data || {};
+  if (!clinicaId) throw new HttpsError("invalid-argument", "clinicaId é obrigatório.");
+
+  const snap = await db.collection(`clinicas/${clinicaId}/notasFiscais`).get();
+  let atualizadas = 0;
+  for (const doc of snap.docs) {
+    const dados = doc.data();
+    if (!dados.respostaWebservice) continue;
+    const m = dados.respostaWebservice.match(/<Sucesso>(true|false)<\/Sucesso>/i);
+    if (!m) continue;
+    const novoStatus = m[1].toLowerCase() === "true" ? "autorizada" : "rejeitada";
+    if (dados.status !== novoStatus) {
+      await doc.ref.update({ status: novoStatus });
+      atualizadas += 1;
+    }
+  }
+
+  return { ok: true, atualizadas, total: snap.size };
 });

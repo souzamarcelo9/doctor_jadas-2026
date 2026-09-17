@@ -41,7 +41,7 @@ export default function Sidebar() {
           <div className="flex items-center gap-2">
             <img src={logoNucleo} alt="Núcleo" className="w-8 h-8 object-contain" />
             <span className="inline md:hidden lg:inline font-display font-semibold tracking-wide text-sm">
-              Doctor<span className="text-brand-300">JADS</span>
+              Doctor<span className="text-brand-300">NÚCLEO</span>
             </span>
           </div>
           <button onClick={fechar} className="md:hidden p-1.5 rounded-lg hover:bg-white/10 focus-ring"><X size={18} /></button>
@@ -63,7 +63,7 @@ export default function Sidebar() {
           ))}
         </nav>
         <div className="block md:hidden lg:block px-4 py-4 text-[11px] text-brand-200/60 border-t border-white/10 shrink-0">
-          DOCTOR-JADS 2026
+          DOCTOR-NÚCLEO 2026
         </div>
       </aside>
     </>

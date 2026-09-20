@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Send, ArrowRight, Loader2 } from "lucide-react";
+import { Send, ArrowRight, Loader2, AlertTriangle } from "lucide-react";
 import { useTenant } from "../../context/TenantContext";
-import { useFirestoreCollection, criarDocumento } from "../../lib/firestore";
+import { useFirestoreCollection, criarDocumento, mensagemErroAmigavel } from "../../lib/firestore";
 
 export default function Encaminhamento() {
   const { pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
@@ -9,16 +9,21 @@ export default function Encaminhamento() {
   const [especialidade, setEspecialidade] = useState("");
   const [motivo, setMotivo] = useState("");
   const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
 
   async function encaminhar() {
     if (!especialidade.trim() || !firebaseConfigured) return;
     setSalvando(true);
+    setErro("");
     try {
       await criarDocumento(`${pacientePath}/encaminhamentos`, {
         especialidade, motivo, status: "Agendado", ativo: true, atendimentoId, profissionalId,
       });
       setEspecialidade("");
       setMotivo("");
+    } catch (err) {
+      console.error("Erro ao salvar encaminhamento:", err);
+      setErro(mensagemErroAmigavel(err));
     } finally {
       setSalvando(false);
     }
@@ -40,6 +45,11 @@ export default function Encaminhamento() {
           <textarea value={motivo} onChange={(e) => setMotivo(e.target.value)} rows={3} placeholder="Descreva o motivo do encaminhamento…"
             className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring resize-none" />
         </label>
+        {erro && (
+          <div className="flex items-start gap-2 text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-2.5">
+            <AlertTriangle size={13} className="mt-0.5 shrink-0" /> {erro}
+          </div>
+        )}
         <button onClick={encaminhar} disabled={salvando || !firebaseConfigured} className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring">
           {salvando ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />} Encaminhar paciente
         </button>

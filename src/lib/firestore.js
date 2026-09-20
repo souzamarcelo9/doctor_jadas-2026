@@ -163,3 +163,15 @@ export function useFirestoreDoc(path, id) {
 
   return { data, loading };
 }
+
+/** Traduz erros comuns do Firestore/Firebase pra uma mensagem que faz
+ * sentido pra quem está usando o sistema — sem isso, um erro de permissão
+ * (ex: alguém que não é médico tentando salvar conduta/prescrição/
+ * encaminhamento) falha silenciosamente, só visível no console do
+ * navegador, e a pessoa não entende por que o botão "não fez nada". */
+export function mensagemErroAmigavel(err) {
+  if (err?.code === "permission-denied") {
+    return "Você não tem permissão para registrar isso — só o médico responsável pelo atendimento pode salvar conduta, prescrição ou encaminhamento.";
+  }
+  return err?.message || "Não foi possível salvar. Tente novamente.";
+}

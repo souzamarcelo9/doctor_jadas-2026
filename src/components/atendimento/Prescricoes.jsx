@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Pill, ExternalLink, Send, CheckCircle2, Loader2, AlertTriangle, X } from "lucide-react";
 import { useTenant } from "../../context/TenantContext";
-import { useFirestoreCollection, useFirestoreDoc, criarDocumento, atualizarDocumento } from "../../lib/firestore";
+import { useFirestoreCollection, useFirestoreDoc, criarDocumento, atualizarDocumento, mensagemErroAmigavel } from "../../lib/firestore";
 import { memedObterToken } from "../../lib/memed";
 
 // Ambiente de testes/sandbox da Memed por padrão. Em produção, defina
@@ -165,6 +165,7 @@ export default function Prescricoes() {
       );
     } catch (err) {
       console.error("Erro ao salvar prescrição vinda da Memed:", err);
+      setErro(`A prescrição foi emitida pela Memed, mas não consegui salvar o registro aqui no sistema: ${mensagemErroAmigavel(err)}`);
     }
   }
 

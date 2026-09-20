@@ -1,24 +1,29 @@
 import { useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 import { condutaFavorites } from "../../data/mockData";
 import { useTenant } from "../../context/TenantContext";
-import { useFirestoreCollection, criarDocumento, atualizarDocumento } from "../../lib/firestore";
+import { useFirestoreCollection, criarDocumento, atualizarDocumento, mensagemErroAmigavel } from "../../lib/firestore";
 
 export default function Conduta() {
   const { clinicaId, pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
   const { data: entries, loading } = useFirestoreCollection(`${pacientePath}/condutas`);
   const [text, setText] = useState("");
   const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
 
   async function salvar() {
     if (!text.trim() || !firebaseConfigured) return;
     setSalvando(true);
+    setErro("");
     try {
       await criarDocumento(`${pacientePath}/condutas`, { texto: text, ativo: true, atendimentoId, profissionalId });
       if (atendimentoId) {
         await atualizarDocumento(`clinicas/${clinicaId}/atendimentos`, atendimentoId, { condutaResumo: text });
       }
       setText("");
+    } catch (err) {
+      console.error("Erro ao salvar conduta:", err);
+      setErro(mensagemErroAmigavel(err));
     } finally {
       setSalvando(false);
     }
@@ -42,6 +47,11 @@ export default function Conduta() {
             placeholder="Descreva a conduta clínica adotada para este atendimento…"
             className="w-full text-sm resize-none outline-none placeholder:text-ink-500/60"
           />
+          {erro && (
+            <div className="flex items-start gap-2 text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-2.5 mt-2">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" /> {erro}
+            </div>
+          )}
           <div className="flex justify-end pt-2 border-t border-black/5 mt-2">
             <button onClick={salvar} disabled={salvando || !firebaseConfigured} className="flex items-center gap-1.5 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-xs font-semibold px-4 py-1.5 rounded-lg focus-ring">
               {salvando && <Loader2 size={12} className="animate-spin" />} Salvar conduta

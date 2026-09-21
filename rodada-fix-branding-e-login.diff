@@ -1,0 +1,82 @@
+diff --git a/src/pages/AvaliarConsulta.jsx b/src/pages/AvaliarConsulta.jsx
+index c73db4c..79a362f 100644
+--- a/src/pages/AvaliarConsulta.jsx
++++ b/src/pages/AvaliarConsulta.jsx
+@@ -37,7 +37,7 @@ export default function AvaliarConsulta() {
+       <div className="w-full max-w-md">
+         <div className="flex items-center gap-2 justify-center mb-8">
+           <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
+-          <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">PEP</span></span>
++          <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">JADS</span></span>
+         </div>
+ 
+         <div className="card p-7 text-center">
+diff --git a/src/pages/Cadastro.jsx b/src/pages/Cadastro.jsx
+index 93d8eff..90eb706 100644
+--- a/src/pages/Cadastro.jsx
++++ b/src/pages/Cadastro.jsx
+@@ -48,7 +48,7 @@ export default function Cadastro() {
+           <div>
+             <div className="flex items-center gap-2">
+               <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
+-              <span className="font-display font-semibold tracking-wide">Doctor<span className="text-brand-300">PEP</span></span>
++              <span className="font-display font-semibold tracking-wide">Doctor<span className="text-brand-300">JADS</span></span>
+             </div>
+             <h1 className="font-display font-semibold text-2xl leading-snug mt-10">Comece a usar em poucos minutos.</h1>
+             <p className="text-sm text-white/70 mt-3 leading-relaxed">
+@@ -61,7 +61,7 @@ export default function Cadastro() {
+         <div className="lg:col-span-3 bg-white p-8 sm:p-10 flex flex-col justify-center">
+           <div className="lg:hidden flex items-center gap-2 mb-8">
+             <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
+-            <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">PEP</span></span>
++            <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">JADS</span></span>
+           </div>
+ 
+           <h2 className="font-display font-semibold text-xl text-ink-900">Criar conta</h2>
+diff --git a/src/pages/Login.jsx b/src/pages/Login.jsx
+index d055a78..9bfee0a 100644
+--- a/src/pages/Login.jsx
++++ b/src/pages/Login.jsx
+@@ -50,7 +50,7 @@ export default function Login() {
+             <div className="flex items-center gap-2">
+               <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
+               <span className="font-display font-semibold tracking-wide">
+-                Doctor<span className="text-brand-300">PEP</span>
++                Doctor<span className="text-brand-300">JADS</span>
+               </span>
+             </div>
+             <h1 className="font-display font-semibold text-2xl leading-snug mt-10">
+@@ -69,7 +69,7 @@ export default function Login() {
+           <div className="lg:hidden flex items-center gap-2 mb-8">
+             <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
+             <span className="font-display font-semibold tracking-wide text-ink-900">
+-              Doctor<span className="text-brand-500">PEP</span>
++              Doctor<span className="text-brand-500">JADS</span>
+             </span>
+           </div>
+ 
+@@ -155,7 +155,10 @@ export default function Login() {
+             Ao continuar, você concorda com os Termos de Uso e a Política de Privacidade da clínica.
+           </p>
+           <p className="text-xs text-ink-500 mt-3 text-center">
+-            Ainda não tem conta? <Link to="/cadastro" className="text-brand-600 hover:text-brand-700 font-medium">Criar conta</Link>
++            Já faz parte de uma clínica? Peça um convite ao administrador — você não precisa criar conta por aqui.
++          </p>
++          <p className="text-[11px] text-ink-400 mt-2 text-center">
++            Sua clínica ainda não usa o sistema? <Link to="/cadastro" className="text-brand-600 hover:text-brand-700 font-medium">Comece agora</Link>
+           </p>
+         </div>
+       </div>
+diff --git a/src/pages/Onboarding.jsx b/src/pages/Onboarding.jsx
+index 1d0fcab..5582b8c 100644
+--- a/src/pages/Onboarding.jsx
++++ b/src/pages/Onboarding.jsx
+@@ -39,7 +39,7 @@ export default function Onboarding() {
+       <div className="w-full max-w-md">
+         <div className="flex items-center gap-2 justify-center mb-8">
+           <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
+-          <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">PEP</span></span>
++          <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">JADS</span></span>
+         </div>
+ 
+         <div className="card p-7">

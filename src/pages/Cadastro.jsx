@@ -48,7 +48,7 @@ export default function Cadastro() {
           <div>
             <div className="flex items-center gap-2">
               <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
-              <span className="font-display font-semibold tracking-wide">Doctor<span className="text-brand-300">PEP</span></span>
+              <span className="font-display font-semibold tracking-wide">Doctor<span className="text-brand-300">JADS</span></span>
             </div>
             <h1 className="font-display font-semibold text-2xl leading-snug mt-10">Comece a usar em poucos minutos.</h1>
             <p className="text-sm text-white/70 mt-3 leading-relaxed">
@@ -61,7 +61,7 @@ export default function Cadastro() {
         <div className="lg:col-span-3 bg-white p-8 sm:p-10 flex flex-col justify-center">
           <div className="lg:hidden flex items-center gap-2 mb-8">
             <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
-            <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">PEP</span></span>
+            <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">JADS</span></span>
           </div>
 
           <h2 className="font-display font-semibold text-xl text-ink-900">Criar conta</h2>

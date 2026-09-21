@@ -37,7 +37,7 @@ export default function AvaliarConsulta() {
       <div className="w-full max-w-md">
         <div className="flex items-center gap-2 justify-center mb-8">
           <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
-          <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">PEP</span></span>
+          <span className="font-display font-semibold tracking-wide text-ink-900">Doctor<span className="text-brand-500">JADS</span></span>
         </div>
 
         <div className="card p-7 text-center">

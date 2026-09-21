@@ -69,7 +69,7 @@ export default function Login() {
           <div className="lg:hidden flex items-center gap-2 mb-8">
             <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
             <span className="font-display font-semibold tracking-wide text-ink-900">
-              Doctor<span className="text-brand-500">Jads</span>
+              Doctor<span className="text-brand-500">JADS</span>
             </span>
           </div>
 
@@ -155,7 +155,10 @@ export default function Login() {
             Ao continuar, você concorda com os Termos de Uso e a Política de Privacidade da clínica.
           </p>
           <p className="text-xs text-ink-500 mt-3 text-center">
-            Ainda não tem conta? <Link to="/cadastro" className="text-brand-600 hover:text-brand-700 font-medium">Criar conta</Link>
+            Já faz parte de uma clínica? Peça um convite ao administrador — você não precisa criar conta por aqui.
+          </p>
+          <p className="text-[11px] text-ink-400 mt-2 text-center">
+            Sua clínica ainda não usa o sistema? <Link to="/cadastro" className="text-brand-600 hover:text-brand-700 font-medium">Comece agora</Link>
           </p>
         </div>
       </div>

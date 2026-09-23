@@ -31,6 +31,14 @@ export function montarMensagemFormulario(ag) {
   return `Olá, ${primeiroNome}! Para agilizar sua consulta do dia ${dataFmt} às ${horaFmt}, pedimos que preencha o formulário de anamnese que enviaremos em seguida. Qualquer dúvida, estamos à disposição.`;
 }
 
+/** Mensagem com o link de verdade do formulário de triagem/anamnese —
+ * diferente de montarMensagemFormulario acima, que só avisa que "vamos
+ * mandar" sem nunca mandar nada de fato. */
+export function montarMensagemTriagem(pacienteNome, link) {
+  const primeiroNome = (pacienteNome || "").split(" ")[0];
+  return `Olá, ${primeiroNome}! Antes da sua consulta, pedimos que preencha esse formulário rápido: ${link}\n\nLeva só alguns minutos e ajuda o médico a já chegar com mais informações sobre você. Obrigado!`;
+}
+
 /** Abre o WhatsApp Web/App com a mensagem já pronta para o número informado.
  * Não é uma API de envio automático — ainda precisa de um clique manual
  * dentro do WhatsApp para efetivamente enviar. */

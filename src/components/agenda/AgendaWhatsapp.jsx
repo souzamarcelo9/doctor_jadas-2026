@@ -3,7 +3,8 @@ import { Timestamp } from "firebase/firestore";
 import { MessageCircle, FileText, BellRing, Send, CheckCheck, Clock3, Loader2, AlertTriangle, ExternalLink } from "lucide-react";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreQuery, useFirestoreCollection, where, orderBy, criarDocumento } from "../../lib/firestore";
-import { paraFormatoWhatsapp, montarMensagemConfirmacao, montarMensagemFormulario } from "../../lib/whatsapp";
+import { paraFormatoWhatsapp, montarMensagemConfirmacao } from "../../lib/whatsapp";
+import EnviarTriagemModal from "./EnviarTriagemModal";
 
 const statusMap = {
   confirmado: { label: "Confirmado", tone: "bg-emerald-100 text-emerald-700" },
@@ -20,14 +21,11 @@ function inicioFimHoje() {
   return [Timestamp.fromDate(ini), Timestamp.fromDate(fim)];
 }
 
-function montarMensagem(ag, tipo) {
-  return tipo === "formulario" ? montarMensagemFormulario(ag) : montarMensagemConfirmacao(ag);
-}
-
 export default function AgendaWhatsapp() {
   const { clinicaId, profissionalId } = useTenant();
   const [inicio, fim] = useMemo(() => inicioFimHoje(), []);
   const [erro, setErro] = useState("");
+  const [triagemAg, setTriagemAg] = useState(null);
 
   const { data: rows, loading } = useFirestoreQuery(
     clinicaId ? `clinicas/${clinicaId}/agendamentos` : null,
@@ -37,25 +35,24 @@ export default function AgendaWhatsapp() {
 
   const { data: log } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/notificacoes` : null, "criadoEm", "desc");
 
-  async function enviarWhatsapp(ag, tipo) {
+  async function enviarWhatsapp(ag) {
     setErro("");
     const numero = paraFormatoWhatsapp(ag.pacienteTelefone);
     if (!numero) {
       setErro(`${ag.pacienteNome} não tem telefone cadastrado — edite o paciente para adicionar um número antes de enviar.`);
       return;
     }
-    const mensagem = montarMensagem(ag, tipo);
     // wa.me abre o WhatsApp com a mensagem pronta — o envio em si ainda
     // precisa de um clique manual dentro do WhatsApp (não é uma API de
     // envio automático; ver observação na tela).
-    window.open(`https://wa.me/${numero}?text=${encodeURIComponent(mensagem)}`, "_blank", "noopener,noreferrer");
+    window.open(`https://wa.me/${numero}?text=${encodeURIComponent(montarMensagemConfirmacao(ag))}`, "_blank", "noopener,noreferrer");
 
     await criarDocumento(`clinicas/${clinicaId}/notificacoes`, {
-      tipo,
+      tipo: "lembrete",
       pacienteId: ag.pacienteId,
       pacienteNome: ag.pacienteNome,
       canal: "whatsapp_link",
-      texto: `Link do WhatsApp aberto para ${ag.pacienteNome} (${tipo === "formulario" ? "formulário" : "lembrete"}) — envio precisa ser confirmado manualmente.`,
+      texto: `Link do WhatsApp aberto para ${ag.pacienteNome} (lembrete) — envio precisa ser confirmado manualmente.`,
     });
   }
 
@@ -104,10 +101,10 @@ export default function AgendaWhatsapp() {
                     <Td><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusMap[r.status]?.tone || "bg-gray-100 text-gray-500"}`}>{statusMap[r.status]?.label || r.status}</span></Td>
                     <Td>
                       <div className="flex gap-1.5">
-                        <button onClick={() => enviarWhatsapp(r, "lembrete")} title="Abrir lembrete no WhatsApp" className="flex items-center gap-1 p-1.5 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 focus-ring">
+                        <button onClick={() => enviarWhatsapp(r)} title="Abrir lembrete no WhatsApp" className="flex items-center gap-1 p-1.5 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 focus-ring">
                           <Send size={13} /><ExternalLink size={10} />
                         </button>
-                        <button onClick={() => enviarWhatsapp(r, "formulario")} title="Abrir aviso de formulário no WhatsApp" className="flex items-center gap-1 p-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 focus-ring">
+                        <button onClick={() => setTriagemAg(r)} title="Enviar formulário de triagem (link pra preencher antes da consulta)" className="flex items-center gap-1 p-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 focus-ring">
                           <FileText size={13} /><ExternalLink size={10} />
                         </button>
                       </div>
@@ -139,6 +136,13 @@ export default function AgendaWhatsapp() {
           </div>
         </div>
       </div>
+
+      <EnviarTriagemModal
+        open={!!triagemAg}
+        onClose={() => setTriagemAg(null)}
+        paciente={triagemAg ? { id: triagemAg.pacienteId, nome: triagemAg.pacienteNome, telefone: triagemAg.pacienteTelefone } : null}
+        agendamentoId={triagemAg?.id}
+      />
     </div>
   );
 }

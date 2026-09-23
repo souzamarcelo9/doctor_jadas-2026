@@ -1617,3 +1617,42 @@ exports.nfseRecalcularStatus = onCall({ region: REGION, timeoutSeconds: 120 }, a
 
   return { ok: true, atualizadas, total: snap.size };
 });
+
+// ---------------------------------------------------------------------
+// Triagem/anamnese pré-consulta — espelha a resposta do paciente pro
+// prontuário assim que ele preenche o formulário público
+// ---------------------------------------------------------------------
+//
+// O paciente responde em `convitesFormulario/{id}` (documento público, sem
+// login — ver TriagemPublica.jsx e a regra correspondente). Esse gatilho
+// dispara quando o status muda pra "respondido" e cria automaticamente um
+// registro em `pacientes/{pacienteId}/formulariosRespondidos`, no mesmo
+// formato que FormularioResponderModal já grava quando é o médico quem
+// responde direto no atendimento — assim a resposta já aparece pronta na
+// aba Formulários quando o paciente chegar pra consulta, sem precisar de
+// nenhuma ação manual de ninguém da equipe.
+exports.onConviteFormularioRespondido = onDocumentWritten(
+  { region: REGION, document: "clinicas/{clinicaId}/convitesFormulario/{conviteId}" },
+  async (event) => {
+    const antes = event.data?.before?.data();
+    const depois = event.data?.after?.data();
+    if (!depois) return; // convite excluído, nada a espelhar
+    if (depois.status !== "respondido") return; // só nos importa a transição pra respondido
+    if (antes?.status === "respondido") return; // já espelhado antes, evita duplicar em updates subsequentes
+
+    const { clinicaId, conviteId } = event.params;
+    if (!depois.pacienteId) return;
+
+    await db.collection(`clinicas/${clinicaId}/pacientes/${depois.pacienteId}/formulariosRespondidos`).add({
+      formularioId: depois.formularioId || null,
+      formularioNome: depois.formularioNome || "Formulário de triagem",
+      respostas: depois.respostas || [],
+      scoreTotal: depois.scoreTotal ?? null,
+      atendimentoId: null, // preenchido antes de existir um atendimento — fica visível no histórico geral do paciente de qualquer forma
+      profissionalId: null,
+      preenchidoPeloPaciente: true,
+      conviteFormularioId: conviteId,
+      ativo: true,
+    });
+  }
+);

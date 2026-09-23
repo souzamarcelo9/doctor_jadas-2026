@@ -8,6 +8,7 @@ import Login from "./pages/Login";
 import Cadastro from "./pages/Cadastro";
 import Onboarding from "./pages/Onboarding";
 import AvaliarConsulta from "./pages/AvaliarConsulta";
+import TriagemPublica from "./pages/TriagemPublica";
 import Dashboard from "./pages/Dashboard";
 import Agenda from "./pages/Agenda";
 import Pacientes from "./pages/Pacientes";
@@ -46,6 +47,7 @@ export default function App() {
           <Route path="/cadastro" element={<Cadastro />} />
           <Route path="/onboarding" element={<ProtectedRoute><Onboarding /></ProtectedRoute>} />
           <Route path="/avaliar/:clinicaId/:avaliacaoId" element={<AvaliarConsulta />} />
+          <Route path="/triagem/:clinicaId/:conviteId" element={<TriagemPublica />} />
           <Route element={<AppLayout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/agenda" element={<Agenda />} />

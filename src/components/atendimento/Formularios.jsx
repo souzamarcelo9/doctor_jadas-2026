@@ -64,7 +64,12 @@ export default function Formularios() {
             {respostas.map((r) => (
               <tr key={r.id} className="border-t border-black/5">
                 <Td className="whitespace-nowrap">{formatarData(r.criadoEm)}</Td>
-                <Td className="font-medium text-ink-900">{r.formularioNome}</Td>
+                <Td className="font-medium text-ink-900">
+                  {r.formularioNome}
+                  {r.preenchidoPeloPaciente && (
+                    <span className="ml-1.5 text-[9px] font-semibold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded-full align-middle">Preenchido pelo paciente</span>
+                  )}
+                </Td>
                 <Td>{r.scoreTotal ?? "—"}</Td>
                 <Td>
                   <div className="flex items-center gap-2">

@@ -203,6 +203,24 @@ service cloud.firestore {
         allow delete: if souAdmin(clinicaId);
       }
 
+      // ---- convites de formulário de triagem/anamnese — mesmo padrão de
+      // acesso público da avaliações (ID do documento como token), mas pro
+      // paciente preencher um formulário ANTES da consulta, sem estar
+      // logado. O template (campos) fica copiado dentro do próprio convite
+      // na criação, então o link público nunca precisa ler a coleção
+      // `formularios` (mantém a superfície de acesso público mínima). ----
+      match /convitesFormulario/{id} {
+        allow get: if souMembro(clinicaId) || resource.data.status == "pendente";
+        allow list: if souMembro(clinicaId);
+        allow create: if souMembro(clinicaId);
+        allow update: if souMembro(clinicaId) || (
+          resource.data.status == "pendente" &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["respostas", "scoreTotal", "status", "respondidoEm"]) &&
+          request.resource.data.status == "respondido"
+        );
+        allow delete: if souAdmin(clinicaId);
+      }
+
       // ---- log de notificações (lembretes de WhatsApp, etc.) ----
       match /notificacoes/{id} {
         allow read, create: if souMembro(clinicaId);

@@ -10,6 +10,7 @@ export default function AITranscriber({ onInsertNote }) {
   const [erro, setErro] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [resultado, setResultado] = useState(null); // { queixaResumo, sugestoes }
+  const [pacienteCiente, setPacienteCiente] = useState(false);
 
   const timerRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -26,6 +27,11 @@ export default function AITranscriber({ onInsertNote }) {
   async function startRecording() {
     setErro("");
     setResultado(null);
+    if (!pacienteCiente) {
+      setErro("Confirme que o paciente está ciente da gravação antes de iniciar.");
+      setState("erro");
+      return;
+    }
     if (!firebaseConfigured) {
       setErro("Firebase não configurado — a transcrição real precisa da Cloud Function publicada.");
       setState("erro");
@@ -106,12 +112,21 @@ export default function AITranscriber({ onInsertNote }) {
       </div>
 
       {state === "idle" && (
-        <button
-          onClick={startRecording}
-          className="flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring animate-pulseRing"
-        >
-          <Mic size={16} /> Iniciar gravação da consulta
-        </button>
+        <>
+          <label className="flex items-start gap-2 bg-amber-50/60 border border-amber-100 rounded-lg p-2.5 cursor-pointer">
+            <input type="checkbox" checked={pacienteCiente} onChange={(e) => setPacienteCiente(e.target.checked)} className="mt-0.5 rounded focus-ring" />
+            <span className="text-[11px] text-amber-800">
+              Confirmo que o paciente está ciente de que esta consulta será gravada e processada por IA (Groq) para transcrição, conforme informado na Política de Privacidade.
+            </span>
+          </label>
+          <button
+            onClick={startRecording}
+            disabled={!pacienteCiente}
+            className="flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 disabled:hover:bg-brand-600 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring animate-pulseRing"
+          >
+            <Mic size={16} /> Iniciar gravação da consulta
+          </button>
+        </>
       )}
 
       {state === "recording" && (
@@ -142,7 +157,7 @@ export default function AITranscriber({ onInsertNote }) {
           <div className="flex items-start gap-2 text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-3">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" /> {erro}
           </div>
-          <button onClick={() => setState("idle")} className="w-full text-xs font-semibold text-ink-500 hover:text-ink-900 py-2 rounded-lg focus-ring border border-black/10">
+          <button onClick={() => { setState("idle"); setPacienteCiente(false); }} className="w-full text-xs font-semibold text-ink-500 hover:text-ink-900 py-2 rounded-lg focus-ring border border-black/10">
             Tentar de novo
           </button>
         </div>
@@ -169,7 +184,7 @@ export default function AITranscriber({ onInsertNote }) {
             >
               <FileText size={14} /> Inserir na Queixa do Paciente
             </button>
-            <button onClick={() => setState("idle")} className="text-xs font-semibold text-ink-500 hover:text-ink-900 px-3 rounded-lg focus-ring">
+            <button onClick={() => { setState("idle"); setPacienteCiente(false); }} className="text-xs font-semibold text-ink-500 hover:text-ink-900 px-3 rounded-lg focus-ring">
               Nova gravação
             </button>
           </div>

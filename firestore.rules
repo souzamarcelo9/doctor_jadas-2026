@@ -132,6 +132,18 @@ service cloud.firestore {
         allow read, delete: if souAdmin(clinicaId);
       }
 
+      // ---- log de acesso a prontuário (LGPD — trilha de auditoria) ----
+      // Qualquer membro pode CRIAR um registro (é o próprio uid dele
+      // deixando rastro do próprio acesso) — mas ninguém além do admin
+      // pode LER, ATUALIZAR ou APAGAR. Sem update/delete pra ninguém,
+      // nem admin: um log de auditoria que pode ser editado depois do
+      // fato não serve pra nada.
+      match /logsAcesso/{id} {
+        allow create: if souMembro(clinicaId) && request.resource.data.uid == request.auth.uid;
+        allow read: if souAdmin(clinicaId);
+        allow update, delete: if false;
+      }
+
       // ---- quadro de tarefas (config das colunas do Kanban) ----
       match /quadroTarefas/{id} {
         allow read, write: if souMembro(clinicaId);

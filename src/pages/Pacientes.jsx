@@ -90,17 +90,31 @@ function NovoPacienteModal({ clinicaId, onClose }) {
   const { profissionalId } = useTenant();
   const navigate = useNavigate();
   const [form, setForm] = useState({ nome: "", nascimento: "", sexo: "Feminino", cpf: "", telefone: "", convenioId: "" });
+  const [consentimento, setConsentimento] = useState(false);
   const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
 
   async function salvar() {
+    setErro("");
     if (!form.nome.trim()) return;
+    if (!consentimento) { setErro("É preciso confirmar que o paciente foi informado sobre o tratamento de dados antes de cadastrar."); return; }
     setSalvando(true);
     try {
       const ref = await criarDocumento(`clinicas/${clinicaId}/pacientes`, {
-        ...form, alergiasResumo: false, criadoPor: profissionalId,
+        ...form,
+        alergiasResumo: false,
+        criadoPor: profissionalId,
+        consentimentoLgpd: {
+          aceito: true,
+          aceitoEm: new Date().toISOString(),
+          aceitoPor: profissionalId,
+        },
       });
       onClose();
       navigate(`/atendimento/${ref.id}`);
+    } catch (err) {
+      console.error("Erro ao cadastrar paciente:", err);
+      setErro(err.message || "Não foi possível cadastrar. Tente novamente.");
     } finally {
       setSalvando(false);
     }
@@ -130,6 +144,15 @@ function NovoPacienteModal({ clinicaId, onClose }) {
             <Field label="Telefone" value={form.telefone} onChange={(v) => setForm({ ...form, telefone: v })} />
           </div>
           <Field label="Convênio" value={form.convenioId} onChange={(v) => setForm({ ...form, convenioId: v })} placeholder="Particular" />
+
+          <label className="flex items-start gap-2.5 bg-brand-50/60 border border-brand-100 rounded-lg p-3 cursor-pointer">
+            <input type="checkbox" checked={consentimento} onChange={(e) => setConsentimento(e.target.checked)} className="mt-0.5 rounded focus-ring" />
+            <span className="text-[11px] text-ink-700">
+              Confirmo que o paciente foi informado sobre o tratamento de seus dados pessoais e de saúde nesta clínica, conforme a Política de Privacidade, e consente com isso (LGPD, art. 11).
+            </span>
+          </label>
+
+          {erro && <p className="text-xs text-rose-600">{erro}</p>}
         </div>
         <div className="px-5 py-4 border-t border-black/5 flex justify-end gap-2">
           <button onClick={onClose} className="text-sm font-semibold text-ink-500 hover:text-ink-900 px-4 py-2 rounded-lg focus-ring">Cancelar</button>

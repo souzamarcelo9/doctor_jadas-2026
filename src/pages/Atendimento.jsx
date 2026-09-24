@@ -20,7 +20,10 @@ import Antropometria from "../components/atendimento/Antropometria";
 import Vacinas from "../components/atendimento/Vacinas";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { useTenant } from "../context/TenantContext";
+import { useAuth } from "../context/AuthContext";
+import { useFirestoreDoc } from "../lib/firestore";
 import { enviarAvaliacaoPaciente } from "../lib/avaliacoes";
+import { registrarAcessoPaciente } from "../lib/logsAcesso";
 import { Trash2, CheckCircle2, Loader2, Star } from "lucide-react";
 
 const tabs = [
@@ -32,6 +35,8 @@ const tabs = [
 export default function Atendimento() {
   const { pacienteId: pacienteIdRota } = useParams();
   const { pacienteId, selecionarPaciente, loadingAtendimento, finalizarAtendimento, firebaseConfigured, clinicaId } = useTenant();
+  const { user } = useAuth();
+  const { data: paciente } = useFirestoreDoc(clinicaId && pacienteId ? `clinicas/${clinicaId}/pacientes` : null, pacienteId);
   const navigate = useNavigate();
   const [active, setActive] = useState("Queixa Paciente");
   const [seconds, setSeconds] = useState(0);
@@ -44,6 +49,21 @@ export default function Atendimento() {
       selecionarPaciente(pacienteIdRota);
     }
   }, [pacienteIdRota, pacienteId, selecionarPaciente]);
+
+  // Trilha de auditoria (LGPD) — registra a abertura do prontuário assim
+  // que temos clínica, paciente e usuário logado prontos. Uma vez por
+  // combinação clinicaId/pacienteId/uid (não a cada re-render).
+  useEffect(() => {
+    if (clinicaId && pacienteId && user?.uid) {
+      registrarAcessoPaciente(clinicaId, {
+        uid: user.uid,
+        nomeUsuario: user.displayName || user.email,
+        pacienteId,
+        pacienteNome: paciente?.nome,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clinicaId, pacienteId, user?.uid]);
 
   useEffect(() => {
     const id = setInterval(() => setSeconds((s) => s + 1), 1000);

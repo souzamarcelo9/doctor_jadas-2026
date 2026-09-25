@@ -30,6 +30,23 @@ export function gerarSlots(horarioDia) {
   return slots;
 }
 
+/** Gera os horários que caem DENTRO do intervalo/almoço cadastrado pro dia,
+ * no mesmo passo dos slots de consulta — usado só pra desenhar a faixa de
+ * intervalo na grade da Agenda (AgendaGrid), já que `gerarSlots` acima
+ * propositalmente descarta esse período (ele é pra horários disponíveis
+ * pra agendar, não pra exibição). Sem isso a grade ficava em branco no
+ * horário de almoço, sem indicar que ali é intervalo e não "sem cadastro". */
+export function gerarSlotsIntervalo(horarioDia) {
+  if (!horarioDia || !horarioDia.ativo) return [];
+  const intInicio = horarioDia.inicioIntervalo && horarioDia.inicioIntervalo !== "--:--" ? minutos(horarioDia.inicioIntervalo) : null;
+  const intFim = horarioDia.fimIntervalo && horarioDia.fimIntervalo !== "--:--" ? minutos(horarioDia.fimIntervalo) : null;
+  if (intInicio === null || intFim === null || intFim <= intInicio) return [];
+  const passo = minutos(horarioDia.tempoConsulta || "00:30") || 30;
+  const slots = [];
+  for (let t = intInicio; t < intFim; t += passo) slots.push(paraHHMM(t));
+  return slots;
+}
+
 /** Classifica um horário "HH:MM" em manhã/tarde/noite — usado pelo filtro de
  * período tanto na Busca avançada quanto na Lista de espera. */
 export function periodoDoHorario(hhmm) {

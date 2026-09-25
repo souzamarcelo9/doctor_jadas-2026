@@ -11,6 +11,7 @@ import {
 import { enviarFotoPaciente } from "../../lib/storage";
 import { ESTADOS_BR, buscarCidadesPorUf, buscarEnderecoPorCep } from "../../lib/enderecoBr";
 import { abrirLinkWhatsapp, montarMensagemConfirmacao } from "../../lib/whatsapp";
+import { maskCPF, maskCEP, maskCelular, cpfValido, emailValido, celularValido, cepValido, limparNome, LIMITES } from "../../lib/masks";
 
 const TIPOS_CONSULTA = ["CONSULTA", "RETORNO", "PROCEDIMENTO", "EXAME", "TELECONSULTA"];
 const TIPOS_ATENDIMENTO = ["Consulta simples", "Consulta + procedimento", "Encaixe", "Teleconsulta"];
@@ -158,6 +159,10 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
     setErro("");
     if (!novoPaciente && !pacienteSel) { setErro("Selecione um paciente existente ou marque \"Novo Paciente\"."); return; }
     if (!form.nome.trim()) { setErro("Informe o nome do paciente."); return; }
+    if (form.cpf && !cpfValido(form.cpf)) { setErro("CPF inválido — confira os dígitos informados."); return; }
+    if (!celularValido(form.celular)) { setErro("Celular inválido — informe DDD + número (10 ou 11 dígitos)."); return; }
+    if (!emailValido(form.email)) { setErro("E-mail inválido."); return; }
+    if (!cepValido(form.cep)) { setErro("CEP inválido — deve ter 8 dígitos."); return; }
     if (!agendaForm.data || !agendaForm.hora) { setErro("Informe data e hora do agendamento."); return; }
     const semCobranca = !agendaForm.servicoId && (!Number(agendaForm.valor) || Number(agendaForm.valor) <= 0);
     if (semCobranca && !confirmouSemCobranca) {
@@ -343,28 +348,28 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
               </label>
             </div>
             <div className="flex-1 space-y-2.5">
-              <Field label="Nome" value={form.nome} onChange={(v) => setForm({ ...form, nome: v })} />
-              <Field label="Nome da Mãe" value={form.nomeMae} onChange={(v) => setForm({ ...form, nomeMae: v })} />
+              <Field label="Nome" value={form.nome} maxLength={LIMITES.nome} onChange={(v) => setForm({ ...form, nome: limparNome(v) })} />
+              <Field label="Nome da Mãe" value={form.nomeMae} maxLength={LIMITES.nomeMae} onChange={(v) => setForm({ ...form, nomeMae: limparNome(v) })} />
             </div>
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-            <Field label="CPF" value={form.cpf} onChange={(v) => setForm({ ...form, cpf: v })} />
-            <Field label="Ficha do Paciente" value={form.fichaPaciente} onChange={(v) => setForm({ ...form, fichaPaciente: v })} />
+            <Field label="CPF" value={form.cpf} maxLength={LIMITES.cpf} placeholder="000.000.000-00" onChange={(v) => setForm({ ...form, cpf: maskCPF(v) })} />
+            <Field label="Ficha do Paciente" value={form.fichaPaciente} maxLength={LIMITES.fichaPaciente} onChange={(v) => setForm({ ...form, fichaPaciente: v })} />
             <SelectField label="Sexo" value={form.sexo} onChange={(v) => setForm({ ...form, sexo: v })} options={["Feminino", "Masculino", "Outro"]} />
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <Field label="Celular" value={form.celular} onChange={(v) => setForm({ ...form, celular: v })} placeholder="(00) 00000-0000" />
+            <Field label="Celular" value={form.celular} maxLength={LIMITES.celular} onChange={(v) => setForm({ ...form, celular: maskCelular(v) })} placeholder="(00) 00000-0000" />
             <Field label="Data de nascimento" type="date" value={form.nascimento} onChange={(v) => setForm({ ...form, nascimento: v })} />
-            <Field label="Email" type="email" value={form.email} onChange={(v) => setForm({ ...form, email: v })} />
+            <Field label="Email" type="email" value={form.email} maxLength={LIMITES.email} onChange={(v) => setForm({ ...form, email: v })} />
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <Field label="CEP" value={form.cep} onChange={(v) => setForm({ ...form, cep: v })} placeholder="00000-000" />
-            <Field label="Logradouro" value={form.logradouro} onChange={(v) => setForm({ ...form, logradouro: v })} />
-            <Field label="Nº" value={form.numero} onChange={(v) => setForm({ ...form, numero: v })} />
+            <Field label="CEP" value={form.cep} maxLength={LIMITES.cep} onChange={(v) => setForm({ ...form, cep: maskCEP(v) })} placeholder="00000-000" />
+            <Field label="Logradouro" value={form.logradouro} maxLength={LIMITES.logradouro} onChange={(v) => setForm({ ...form, logradouro: v })} />
+            <Field label="Nº" value={form.numero} maxLength={LIMITES.numero} onChange={(v) => setForm({ ...form, numero: v })} />
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <Field label="Bairro" value={form.bairro} onChange={(v) => setForm({ ...form, bairro: v })} />
+            <Field label="Bairro" value={form.bairro} maxLength={LIMITES.bairro} onChange={(v) => setForm({ ...form, bairro: v })} />
             <SelectField label="Estado" value={form.estado} onChange={(v) => setForm({ ...form, estado: v, cidade: "" })} options={ESTADOS_BR.map((e) => e.sigla)} placeholder="UF" />
             <SelectField label="Cidade" value={form.cidade} onChange={(v) => setForm({ ...form, cidade: v })} options={cidades} placeholder={form.estado ? (cidades.length ? "Selecione" : "Nenhuma cidade encontrada") : "Selecione o estado"} disabled={!form.estado} />
           </div>
@@ -372,7 +377,7 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
           <p className="text-[11px] text-ink-500">**Campos importantes para identificação inequívoca do paciente</p>
 
           <Collapsible label="Informações complementares" open={showComplementares} onToggle={() => setShowComplementares((o) => !o)}>
-            <Field label="Observações gerais do paciente" value={form.observacoesGerais} onChange={(v) => setForm({ ...form, observacoesGerais: v })} />
+            <Field label="Observações gerais do paciente" value={form.observacoesGerais} maxLength={LIMITES.observacoesGerais} onChange={(v) => setForm({ ...form, observacoesGerais: v })} />
           </Collapsible>
 
           {/* Indicadores do paciente */}
@@ -421,7 +426,7 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
           </div>
           <div className="grid grid-cols-2 gap-3">
             <SelectField label="Convênio" value={agendaForm.convenioId} onChange={(v) => setAgendaForm({ ...agendaForm, convenioId: v })} options={convenios.map((c) => c.id)} labels={Object.fromEntries(convenios.map((c) => [c.id, c.nome]))} placeholder="Particular" />
-            <Field label="Carteirinha" value={agendaForm.carteirinha} onChange={(v) => setAgendaForm({ ...agendaForm, carteirinha: v })} />
+            <Field label="Carteirinha" value={agendaForm.carteirinha} maxLength={LIMITES.carteirinha} onChange={(v) => setAgendaForm({ ...agendaForm, carteirinha: v })} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <SelectField label="Consulta / Serviço" value={agendaForm.servicoId} onChange={selecionarServico} options={servicos.map((s) => s.id)} labels={Object.fromEntries(servicos.map((s) => [s.id, s.nome]))} placeholder="Selecione um serviço" />

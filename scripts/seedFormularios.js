@@ -289,11 +289,57 @@ const riscoCardiovascular = {
     campo("Colesterol total (mg/dL)", "numero"),
     campo("HDL-colesterol (mg/dL)", "numero"),
     campo("Pressão arterial sistólica (mmHg)", "numero"),
+    campo("Pressão arterial diastólica (mmHg)", "numero"),
     campo("Em tratamento para hipertensão?", "opcoes", [{ label: "Sim", valor: 0 }, { label: "Não", valor: 0 }]),
     campo("Tabagista atual?", "opcoes", [{ label: "Sim", valor: 0 }, { label: "Não", valor: 0 }]),
     campo("Diabetes?", "opcoes", [{ label: "Sim", valor: 0 }, { label: "Não", valor: 0 }]),
     campo("História familiar de doença cardiovascular prematura?", "opcoes", [{ label: "Sim", valor: 0 }, { label: "Não", valor: 0 }]),
     campo("Observações / conduta", "texto"),
+  ],
+  pontuavel: false,
+  ativo: true,
+};
+
+// ---------------------------------------------------------------------
+// DLQI-BRA — Anexo CEDMEX/PB (Solicitação de Medicamento — Psoríase)
+// Fonte: anexo oficial do CEDMEX/PB, texto verbatim (conferido em
+// novo.portaldacidadania.pb.gov.br, "Anexo Psoríase", PCDT Psoríase,
+// CID-10 L40.0/L40.1/L40.4/L40.8). É o mesmo instrumento DLQI-BRA já
+// cadastrado acima como "Questionário de Qualidade de Vida em
+// Dermatologia", mas com a redação exata do anexo estadual (o item 7 vem
+// desmembrado em 7 e 7.1, como no documento oficial) — mantido como
+// template separado pra não alterar o já existente (que pode ter
+// respostas de pacientes vinculadas aos ids de campo atuais) e pra deixar
+// claro que este aqui é o modelo aceito pelo protocolo, indicado quando o
+// objetivo for anexar ao pedido de medicamento.
+// ⚠️ NÃO soma um "score total" automático: no documento oficial, o item 7
+// é OU o valor de "7" (0 ou 3) OU o de "7.1" (0 a 2), nunca os dois — o
+// motor de formulários daqui não tem lógica condicional entre campos, e
+// somar os dois infla o total além do máximo real (30 pontos). Registre
+// as respostas aqui e aplique a regra oficial do item 7 manualmente ao
+// calcular o score final.
+// ---------------------------------------------------------------------
+const dlqiCedmexPB = {
+  nome: "DLQI-BRA — Anexo CEDMEX/PB (Solicitação de Medicamento · Psoríase)",
+  descricao: "Anexo oficial do CEDMEX/PB para solicitação de medicamento no PCDT Psoríase (CID-10 L40.0, L40.1, L40.4, L40.8) — mesma escala DLQI-BRA, com a redação exata do documento estadual. NÃO soma score automático (o item 7/7.1 exige a regra oficial, condicional) — aplique manualmente. Refere-se à ÚLTIMA SEMANA.",
+  campos: [
+    campo("CID-10 (protocolo Psoríase)", "opcoes", [
+      { label: "L40.0", valor: 0 }, { label: "L40.1", valor: 0 }, { label: "L40.4", valor: 0 }, { label: "L40.8", valor: 0 },
+    ]),
+    dlqiItem("1. O quanto sua pele foi afetada durante a semana que passou por causa de coceira, inflamação, dor ou queimação?", false),
+    dlqiItem("2. Quanto constrangimento ou outro tipo de limitação foi causado por sua pele durante a semana que passou?", false),
+    dlqiItem("3. O quanto sua pele interferiu nas suas atividades de compras ou passeios, em casa ou locais públicos, durante a semana que passou?", false),
+    dlqiItem("4. Até que ponto sua pele interferiu, na semana que passou, com relação às roupas que você normalmente usa?", false),
+    dlqiItem("5. O quanto sua pele afetou qualquer uma das suas atividades sociais ou de lazer na semana que passou?", false),
+    dlqiItem("6. Quão difícil foi para você praticar esportes durante a semana que passou?", false),
+    campo("7. Sua pele impediu que você fosse trabalhar ou estudar durante a semana que passou?", "opcoes", [{ label: "Sim", valor: 3 }, { label: "Não", valor: 0 }]),
+    campo("7.1. Em caso negativo, sua pele já foi problema para você no trabalho ou na vida escolar?", "opcoes", [
+      { label: "Bastante", valor: 2 }, { label: "Um pouco", valor: 1 }, { label: "Nada", valor: 0 },
+    ]),
+    dlqiItem("8. Quão problemática se tornou sua relação com o(a) parceiro(a), amigos próximos ou parentes, por causa de sua pele?", false),
+    dlqiItem("9. Até que ponto sua pele criou dificuldades na sua vida sexual na semana que passou?", false),
+    dlqiItem("10. Até que ponto seu tratamento dermatológico criou problemas para você na semana que passou?", false),
+    campo("Assinatura/carimbo do(a) médico(a) assistente e data (registrar aqui para conferência antes de imprimir/anexar ao pedido)", "texto"),
   ],
   pontuavel: false,
   ativo: true,
@@ -366,7 +412,7 @@ async function upsertPorNome(dados) {
 }
 
 async function main() {
-  const templatesNovos = [ivcf20, meem, edg15, gijon, lawtonBrody];
+  const templatesNovos = [ivcf20, meem, edg15, gijon, lawtonBrody, dlqiCedmexPB];
   const templatesUpsert = [dlqi, riscoCardiovascular, anamneseDermatologica, triagemPreConsulta];
 
   for (const t of templatesNovos) {

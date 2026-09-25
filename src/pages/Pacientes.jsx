@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Topbar from "../components/Topbar";
-import { Search, Plus, UserRound, Stethoscope, Loader2, X } from "lucide-react";
+import { Search, Plus, UserRound, Stethoscope, Loader2, X, Pencil } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
 import { useFirestoreCollection, criarDocumento } from "../lib/firestore";
+import { maskCPF, maskCelular, cpfValido, celularValido, limparNome, LIMITES } from "../lib/masks";
+import EditarPacienteModal from "../components/EditarPacienteModal";
 
 export default function Pacientes() {
   const { clinicaId, firebaseConfigured, loadingClinicas, clinicasDisponiveis } = useTenant();
@@ -11,6 +13,7 @@ export default function Pacientes() {
   const { data: pacientes, loading } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/pacientes` : null, "nome", "asc");
   const [query, setQuery] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [pacienteEditando, setPacienteEditando] = useState(null);
 
   const filtrados = pacientes.filter((p) =>
     p.nome?.toLowerCase().includes(query.toLowerCase()) || p.cpf?.includes(query)
@@ -67,12 +70,21 @@ export default function Pacientes() {
                     <div className="text-sm font-semibold text-ink-900 truncate">{p.nome}</div>
                     <div className="text-[11px] text-ink-500 mt-0.5">{p.cpf}</div>
                     <div className="text-[11px] text-ink-500">{p.convenioId || "Particular"}</div>
-                    <button
-                      onClick={() => navigate(`/atendimento/${p.id}`)}
-                      className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700"
-                    >
-                      <Stethoscope size={13} /> Iniciar atendimento
-                    </button>
+                    <div className="flex items-center gap-3 mt-2">
+                      <button
+                        onClick={() => navigate(`/atendimento/${p.id}`)}
+                        className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700"
+                      >
+                        <Stethoscope size={13} /> Iniciar atendimento
+                      </button>
+                      <button
+                        onClick={() => setPacienteEditando(p)}
+                        disabled={!firebaseConfigured}
+                        className="flex items-center gap-1.5 text-xs font-semibold text-ink-500 hover:text-ink-900 disabled:opacity-50"
+                      >
+                        <Pencil size={12} /> Editar
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -82,6 +94,13 @@ export default function Pacientes() {
       </main>
 
       {showForm && <NovoPacienteModal clinicaId={clinicaId} onClose={() => setShowForm(false)} />}
+      {pacienteEditando && (
+        <EditarPacienteModal
+          clinicaId={clinicaId}
+          paciente={pacienteEditando}
+          onClose={() => setPacienteEditando(null)}
+        />
+      )}
     </div>
   );
 }
@@ -97,6 +116,8 @@ function NovoPacienteModal({ clinicaId, onClose }) {
   async function salvar() {
     setErro("");
     if (!form.nome.trim()) return;
+    if (form.cpf && !cpfValido(form.cpf)) { setErro("CPF inválido — confira os dígitos informados."); return; }
+    if (!celularValido(form.telefone)) { setErro("Telefone inválido — informe DDD + número (10 ou 11 dígitos)."); return; }
     if (!consentimento) { setErro("É preciso confirmar que o paciente foi informado sobre o tratamento de dados antes de cadastrar."); return; }
     setSalvando(true);
     try {
@@ -129,7 +150,7 @@ function NovoPacienteModal({ clinicaId, onClose }) {
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/15 focus-ring"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-3">
-          <Field label="Nome completo" value={form.nome} onChange={(v) => setForm({ ...form, nome: v })} />
+          <Field label="Nome completo" value={form.nome} maxLength={LIMITES.nome} onChange={(v) => setForm({ ...form, nome: limparNome(v) })} />
           <div className="grid grid-cols-2 gap-3">
             <Field label="Nascimento" type="date" value={form.nascimento} onChange={(v) => setForm({ ...form, nascimento: v })} />
             <label className="block text-xs">
@@ -140,8 +161,8 @@ function NovoPacienteModal({ clinicaId, onClose }) {
             </label>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="CPF" value={form.cpf} onChange={(v) => setForm({ ...form, cpf: v })} />
-            <Field label="Telefone" value={form.telefone} onChange={(v) => setForm({ ...form, telefone: v })} />
+            <Field label="CPF" value={form.cpf} maxLength={LIMITES.cpf} placeholder="000.000.000-00" onChange={(v) => setForm({ ...form, cpf: maskCPF(v) })} />
+            <Field label="Telefone" value={form.telefone} maxLength={LIMITES.celular} placeholder="(00) 00000-0000" onChange={(v) => setForm({ ...form, telefone: maskCelular(v) })} />
           </div>
           <Field label="Convênio" value={form.convenioId} onChange={(v) => setForm({ ...form, convenioId: v })} placeholder="Particular" />
 

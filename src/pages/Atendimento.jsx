@@ -27,7 +27,7 @@ import { registrarAcessoPaciente } from "../lib/logsAcesso";
 import { Trash2, CheckCircle2, Loader2, Star } from "lucide-react";
 
 const tabs = [
-  "Queixa Paciente", "Histórico", "Exame físico", "Problemas", "Alergias",
+  "Queixa Paciente", "Histórico", "Exame físico", "Doenças Pré-existentes / Vícios", "Alergias",
   "Hist. Exames", "Sinais Vitais", "Medidas", "Vacinas", "Imagens", "Formulários", "Encaminhamento",
   "Conduta", "Prescrições",
 ];
@@ -100,7 +100,7 @@ export default function Atendimento() {
       case "Queixa Paciente": return <QueixaPaciente />;
       case "Histórico": return <Historico />;
       case "Exame físico": return <ExameFisico />;
-      case "Problemas": return <Problemas />;
+      case "Doenças Pré-existentes / Vícios": return <Problemas />;
       case "Alergias": return <Alergias />;
       case "Sinais Vitais": return <SinaisVitais />;
       case "Medidas": return <Antropometria />;

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { X, Grip, Pencil, ChevronDown, ChevronUp, Folder, ListTree } from "lucide-react";
 
 const sections = [
-  "Queixa Paciente", "Histórico", "Exame físico", "Problemas", "Alergias",
+  "Queixa Paciente", "Histórico", "Exame físico", "Doenças Pré-existentes / Vícios", "Alergias",
   "Hist. Exames", "Sinais Vitais", "Imagens", "Formulários", "Encaminhamento",
   "Conduta", "Preescrições", "Aso",
 ];

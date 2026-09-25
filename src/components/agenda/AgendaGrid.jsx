@@ -3,7 +3,7 @@ import { Timestamp } from "firebase/firestore";
 import {
   ChevronLeft, ChevronRight, Users, PieChart, XCircle, Clock, Armchair, Lock,
   Stethoscope, UserCheck, CalendarCheck, RefreshCw, Settings2, Loader2,
-  CalendarSearch, Users2, Puzzle, Ban,
+  CalendarSearch, Users2, Puzzle, Ban, Coffee,
 } from "lucide-react";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreDoc, useFirestoreCollection } from "../../lib/firestore";
@@ -13,7 +13,7 @@ import AgendamentoModal from "./AgendamentoModal";
 import ListaEsperaModal from "./ListaEsperaModal";
 import BuscaHorariosModal from "./BuscaHorariosModal";
 import AlteracaoEmBlocoModal from "./AlteracaoEmBlocoModal";
-import { diasSemanaChave, gerarSlots, periodoDoHorario, paraISO } from "../../lib/agendaSlots";
+import { diasSemanaChave, gerarSlots, gerarSlotsIntervalo, periodoDoHorario, paraISO } from "../../lib/agendaSlots";
 
 const situacaoStyle = {
   agendado: { label: "Agendado", rowTone: "bg-blue-50", tag: "bg-blue-100 text-blue-700", icon: CalendarCheck },
@@ -24,6 +24,7 @@ const situacaoStyle = {
   cancelado: { label: "Cancelado", rowTone: "bg-gray-50", tag: "bg-gray-100 text-gray-500", icon: XCircle },
   livre: { label: "Livre", rowTone: "", tag: "bg-gray-100 text-gray-500", icon: Lock },
   bloqueado: { label: "Bloqueado", rowTone: "bg-rose-50/60", tag: "bg-rose-100 text-rose-700", icon: Ban },
+  intervalo: { label: "Intervalo", rowTone: "bg-slate-100", tag: "bg-slate-200 text-slate-600", icon: Coffee },
 };
 
 function hojeISO() {
@@ -64,6 +65,7 @@ export default function AgendaGrid({ onOpenHorarios }) {
   const diaSemana = diasSemanaChave[new Date(`${dateISO}T00:00:00`).getDay()];
   const horarioDoDia = membro?.horariosTrabalho?.find((h) => h.dia === diaSemana);
   const slots = useMemo(() => gerarSlots(horarioDoDia), [horarioDoDia]);
+  const slotsIntervalo = useMemo(() => gerarSlotsIntervalo(horarioDoDia), [horarioDoDia]);
 
   const bloqueiosHoje = useMemo(
     () => bloqueios.filter((b) => dateISO >= b.dataInicial && dateISO <= b.dataFinal && (b.diasSemana || []).includes(diaSemana)),
@@ -94,8 +96,11 @@ export default function AgendaGrid({ onOpenHorarios }) {
         const d = a.dataHora.toDate();
         return { hora: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`, agendamento: a };
       });
-    return [...porHora, ...encaixes].sort((a, b) => a.hora.localeCompare(b.hora));
-  }, [slots, agendamentos, bloqueiosHoje]);
+    // Faixa de intervalo/almoço: preenche a grade em vez de deixar em
+    // branco, já que `slots` (acima) exclui esse período de propósito.
+    const intervalo = slotsIntervalo.map((hora) => ({ hora, intervalo: true }));
+    return [...porHora, ...encaixes, ...intervalo].sort((a, b) => a.hora.localeCompare(b.hora));
+  }, [slots, slotsIntervalo, agendamentos, bloqueiosHoje]);
 
   const ocupados = linhas.filter((l) => l.agendamento).length;
   const faltas = agendamentos.filter((a) => a.status === "faltou").length;
@@ -190,20 +195,21 @@ export default function AgendaGrid({ onOpenHorarios }) {
               </tr>
             </thead>
             <tbody>
-              {linhas.map(({ hora, agendamento, bloqueio }) => {
-                const s = situacaoStyle[agendamento?.status || (bloqueio ? "bloqueado" : "livre")];
+              {linhas.map(({ hora, agendamento, bloqueio, intervalo }) => {
+                const s = situacaoStyle[agendamento?.status || (bloqueio ? "bloqueado" : intervalo ? "intervalo" : "livre")];
                 const Icon = s.icon;
                 return (
                   <tr
                     key={hora}
                     onClick={() => {
+                      if (intervalo) return;
                       if (bloqueio) { setShowBloqueio(true); return; }
                       setModalExtras({}); setModalSlot({ hora, agendamento });
                     }}
-                    className={`border-t border-black/5 ${s.rowTone} hover:bg-brand-50/50 cursor-pointer transition-colors`}
+                    className={`border-t border-black/5 ${s.rowTone} transition-colors ${intervalo ? "cursor-default" : "hover:bg-brand-50/50 cursor-pointer"}`}
                   >
                     <Td className="font-semibold text-brand-700 whitespace-nowrap">{hora}</Td>
-                    <Td className="font-medium text-ink-900">{agendamento?.pacienteNome || (bloqueio ? (bloqueio.motivo || "Horário bloqueado") : "")}</Td>
+                    <Td className="font-medium text-ink-900">{agendamento?.pacienteNome || (bloqueio ? (bloqueio.motivo || "Horário bloqueado") : intervalo ? "Intervalo / Almoço" : "")}</Td>
                     <Td>{agendamento?.convenioNome || ""}</Td>
                     <Td>{agendamento?.tipoAtendimento || ""} {agendamento?.encaixe && <span className="ml-1 text-[9px] font-semibold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded-full align-middle">Encaixe</span>}</Td>
                     <Td>

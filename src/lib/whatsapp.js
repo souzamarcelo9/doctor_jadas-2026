@@ -39,6 +39,12 @@ export function montarMensagemTriagem(pacienteNome, link) {
   return `Olá, ${primeiroNome}! Antes da sua consulta, pedimos que preencha esse formulário rápido: ${link}\n\nLeva só alguns minutos e ajuda o médico a já chegar com mais informações sobre você. Obrigado!`;
 }
 
+/** Mensagem pra mandar o comprovante/NFS-e de um atendimento pro paciente. */
+export function montarMensagemComprovante(pacienteNome, link) {
+  const primeiroNome = (pacienteNome || "").split(" ")[0];
+  return `Olá, ${primeiroNome}! Segue o comprovante/nota fiscal do seu atendimento: ${link}\n\nSe você tem convênio com reembolso, pode usar esse documento pra solicitar junto ao seu plano. Qualquer dúvida, estamos à disposição.`;
+}
+
 /** Abre o WhatsApp Web/App com a mensagem já pronta para o número informado.
  * Não é uma API de envio automático — ainda precisa de um clique manual
  * dentro do WhatsApp para efetivamente enviar. */

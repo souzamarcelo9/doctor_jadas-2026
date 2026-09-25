@@ -12,6 +12,7 @@ import { enviarFotoPaciente } from "../../lib/storage";
 import { ESTADOS_BR, buscarCidadesPorUf, buscarEnderecoPorCep } from "../../lib/enderecoBr";
 import { abrirLinkWhatsapp, montarMensagemConfirmacao } from "../../lib/whatsapp";
 import { maskCPF, maskCEP, maskCelular, cpfValido, emailValido, celularValido, cepValido, limparNome, LIMITES } from "../../lib/masks";
+import { semearEspecialidadesPadrao } from "../../lib/especialidades";
 
 const TIPOS_CONSULTA = ["CONSULTA", "RETORNO", "PROCEDIMENTO", "EXAME", "TELECONSULTA"];
 const TIPOS_ATENDIMENTO = ["Consulta simples", "Consulta + procedimento", "Encaixe", "Teleconsulta"];
@@ -60,6 +61,7 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
   const [confirmouSemCobranca, setConfirmouSemCobranca] = useState(false);
+  const [especialidadeLivre, setEspecialidadeLivre] = useState(false);
 
   const [agendaForm, setAgendaForm] = useState(() => ({
     data: dateISO,
@@ -77,6 +79,23 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
 
   const { data: convenios } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/convenios` : null, "nome", "asc");
   const { data: servicos } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/servicos` : null, "nome", "asc");
+  const { data: especialidades, loading: carregandoEspecialidades } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/especialidades` : null, "nome", "asc");
+
+  // Preenche a clínica com uma lista padrão de especialidades na primeira
+  // vez que alguém agenda e a coleção ainda está vazia — evita que a
+  // secretária tenha que digitar especialidade livremente (e errar
+  // grafia). Depois disso é 100% editável em Configurações.
+  const especialidadesAtivas = especialidades.filter((e) => e.ativo !== false);
+
+  // Preenche a clínica com uma lista padrão de especialidades na primeira
+  // vez que alguém agenda e a coleção ainda está vazia — evita que a
+  // secretária tenha que digitar especialidade livremente (e errar
+  // grafia). Depois disso é 100% editável em Configurações.
+  useEffect(() => {
+    if (!clinicaId || carregandoEspecialidades || especialidades.length > 0) return;
+    semearEspecialidadesPadrao(clinicaId).catch((err) => console.error("Erro ao semear especialidades padrão:", err));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clinicaId, carregandoEspecialidades, especialidades.length]);
 
   // Histórico de agendamentos do paciente selecionado — alimenta os
   // indicadores (1ª consulta, dias desde a última, faltas, cancelamentos).
@@ -421,7 +440,29 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
             <SelectField label="Tipo consulta" value={agendaForm.tipoConsulta} onChange={(v) => setAgendaForm({ ...agendaForm, tipoConsulta: v })} options={TIPOS_CONSULTA} />
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Especialidade" value={agendaForm.especialidade} onChange={(v) => setAgendaForm({ ...agendaForm, especialidade: v })} />
+            {especialidadeLivre ? (
+              <label className="block text-xs">
+                <span className="text-ink-500 font-medium">Especialidade</span>
+                <input
+                  value={agendaForm.especialidade}
+                  maxLength={80}
+                  onChange={(e) => setAgendaForm({ ...agendaForm, especialidade: e.target.value })}
+                  className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring"
+                />
+                <button type="button" onClick={() => setEspecialidadeLivre(false)} className="text-[10px] text-brand-600 hover:text-brand-700 font-semibold mt-1">
+                  ← Escolher da lista
+                </button>
+              </label>
+            ) : (
+              <SelectField
+                label="Especialidade"
+                value={agendaForm.especialidade}
+                onChange={(v) => (v === "__outra__" ? setEspecialidadeLivre(true) : setAgendaForm({ ...agendaForm, especialidade: v }))}
+                options={[...especialidadesAtivas.map((e) => e.nome), "__outra__"]}
+                labels={{ __outra__: "Outra (digitar)…" }}
+                placeholder={carregandoEspecialidades ? "Carregando…" : "Selecione"}
+              />
+            )}
             <SelectField label="Tipo atendimento" value={agendaForm.tipoAtendimento} onChange={(v) => setAgendaForm({ ...agendaForm, tipoAtendimento: v })} options={TIPOS_ATENDIMENTO} />
           </div>
           <div className="grid grid-cols-2 gap-3">

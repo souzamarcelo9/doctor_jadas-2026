@@ -82,6 +82,20 @@ service cloud.firestore {
         allow write: if souMembro(clinicaId) && souAdmin(clinicaId);
       }
 
+      // ---- especialidades (lista usada no campo "Especialidade" do
+      // agendamento, pra secretária escolher em vez de digitar livre).
+      // Diferente de convênios/serviços, "create" é liberado pra qualquer
+      // membro — é o que permite o preenchimento automático da lista
+      // padrão na primeira vez que ALGUÉM (não necessariamente admin) abre
+      // o agendamento numa clínica nova, e também o uso do campo "Outra…"
+      // no formulário. Editar/desativar/apagar continua só admin, pra
+      // manter a lista curada. ----
+      match /especialidades/{id} {
+        allow read: if souMembro(clinicaId);
+        allow create: if souMembro(clinicaId);
+        allow update, delete: if souMembro(clinicaId) && souAdmin(clinicaId);
+      }
+
       // ---- formulários dinâmicos (templates) ----
       match /formularios/{id} {
         allow read: if souMembro(clinicaId);

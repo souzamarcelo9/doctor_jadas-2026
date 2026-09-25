@@ -33,13 +33,18 @@ export default function NotasFiscais() {
   // configurado em Configurações → Dados Fiscais.
   const codigoServicoEfetivo = form.codigoServico || clinica?.codigoServicoPadrao || "04030";
 
-  const contasDisponiveis = contasReceber.filter((c) => c.status === "pendente" && !c.notaFiscalId);
+  // Antes só listava contas "pendente" — mas no fluxo recomendado a
+  // secretária marca como paga (recebe na hora) antes de liberar pro
+  // fiscal emitir a NFS-e, então uma conta "pago" sem nota vinculada
+  // também precisa aparecer aqui (senão ela some da lista assim que é
+  // paga, exatamente quando deveria ficar disponível pra emissão).
+  const contasDisponiveis = contasReceber.filter((c) => !c.notaFiscalId && (c.status === "pendente" || c.status === "pago"));
 
   function vincularConta(id) {
     setContaVinculadaId(id);
     const conta = contasReceber.find((c) => c.id === id);
     if (conta) {
-      setForm((f) => ({ ...f, tomador: conta.pacienteNome || f.tomador, valor: String(conta.valor ?? f.valor), discriminacao: conta.descricao || f.discriminacao }));
+      setForm((f) => ({ ...f, tomador: conta.pacienteNome || f.tomador, cpfCnpj: conta.pacienteCpf || f.cpfCnpj, valor: String(conta.valor ?? f.valor), discriminacao: conta.descricao || f.discriminacao }));
     }
   }
 
@@ -143,7 +148,7 @@ export default function NotasFiscais() {
                 <select value={contaVinculadaId} onChange={(e) => vincularConta(e.target.value)} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring">
                   <option value="">Nota avulsa (cria uma conta nova)</option>
                   {contasDisponiveis.map((c) => (
-                    <option key={c.id} value={c.id}>{c.descricao} — {(c.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</option>
+                    <option key={c.id} value={c.id}>{c.status === "pago" ? "✓ " : ""}{c.descricao} — {(c.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}{c.status === "pago" ? " (pago)" : " (pendente)"}</option>
                   ))}
                 </select>
                 <span className="text-[11px] text-ink-500">Selecionar aqui evita lançar a mesma receita duas vezes no financeiro.</span>

@@ -1,0 +1,1203 @@
+diff --git a/firestore.indexes.json b/firestore.indexes.json
+index afaf4b7..9ca6588 100644
+--- a/firestore.indexes.json
++++ b/firestore.indexes.json
+@@ -71,6 +71,14 @@
+         { "fieldPath": "profissionalId", "order": "ASCENDING" },
+         { "fieldPath": "criadoEm", "order": "DESCENDING" }
+       ]
++    },
++    {
++      "collectionGroup": "historicoClinico",
++      "queryScope": "COLLECTION",
++      "fields": [
++        { "fieldPath": "tipo", "order": "ASCENDING" },
++        { "fieldPath": "criadoEm", "order": "DESCENDING" }
++      ]
+     }
+   ],
+   "fieldOverrides": []
+diff --git a/firestore.rules b/firestore.rules
+index 61ca9b8..a9acea6 100644
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -82,6 +82,20 @@ service cloud.firestore {
+         allow write: if souMembro(clinicaId) && souAdmin(clinicaId);
+       }
+ 
++      // ---- especialidades (lista usada no campo "Especialidade" do
++      // agendamento, pra secretária escolher em vez de digitar livre).
++      // Diferente de convênios/serviços, "create" é liberado pra qualquer
++      // membro — é o que permite o preenchimento automático da lista
++      // padrão na primeira vez que ALGUÉM (não necessariamente admin) abre
++      // o agendamento numa clínica nova, e também o uso do campo "Outra…"
++      // no formulário. Editar/desativar/apagar continua só admin, pra
++      // manter a lista curada. ----
++      match /especialidades/{id} {
++        allow read: if souMembro(clinicaId);
++        allow create: if souMembro(clinicaId);
++        allow update, delete: if souMembro(clinicaId) && souAdmin(clinicaId);
++      }
++
+       // ---- formulários dinâmicos (templates) ----
+       match /formularios/{id} {
+         allow read: if souMembro(clinicaId);
+diff --git a/functions/index.js b/functions/index.js
+index b0b1f8a..646461a 100644
+--- a/functions/index.js
++++ b/functions/index.js
+@@ -1531,6 +1531,67 @@ exports.enviarAvaliacaoPaciente = onCall({ region: REGION, timeoutSeconds: 30, s
+   return { ok: true, avaliacaoId: avaliacaoRef.id };
+ });
+ 
++// ---------------------------------------------------------------------
++// E-mail de comprovante/recibo do Financeiro (contas a receber)
++// ---------------------------------------------------------------------
++//
++// Mesma infra de e-mail (Resend) da função acima — reaproveitada pra
++// mandar o comprovante de pagamento anexado a um lançamento do Financeiro
++// pro paciente vinculado (útil sobretudo pra quem tem convênio com
++// reembolso: o paciente usa esse e-mail/anexo pra pedir reembolso junto
++// à operadora). Precisa da mesma RESEND_API_KEY já usada acima.
++//
++// Entrada:  { clinicaId, contaId }
++// Saída:    { ok: true }
++exports.enviarComprovanteFinanceiro = onCall({ region: REGION, timeoutSeconds: 30, secrets: [resendApiKey] }, async (request) => {
++  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
++  const { clinicaId, contaId } = request.data || {};
++  if (!clinicaId || !contaId) throw new HttpsError("invalid-argument", "Dados incompletos.");
++
++  const membroSnap = await db.doc(`clinicas/${clinicaId}/membros/${request.auth.uid}`).get();
++  if (!membroSnap.exists || membroSnap.data().ativo !== true) {
++    throw new HttpsError("permission-denied", "Você precisa ser membro desta clínica.");
++  }
++  if (!resendApiKey.value()) {
++    throw new HttpsError("failed-precondition", "Envio de e-mail ainda não configurado neste ambiente (RESEND_API_KEY ausente). Avise o administrador do sistema.");
++  }
++
++  const contaRef = db.doc(`clinicas/${clinicaId}/contasReceber/${contaId}`);
++  const contaSnap = await contaRef.get();
++  if (!contaSnap.exists) throw new HttpsError("not-found", "Lançamento não encontrado.");
++  const conta = contaSnap.data();
++  if (!conta.pacienteEmail) {
++    throw new HttpsError("failed-precondition", "Esse lançamento não tem e-mail de paciente cadastrado.");
++  }
++  if (!conta.comprovanteUrl) {
++    throw new HttpsError("failed-precondition", "Anexe o comprovante de pagamento antes de enviar.");
++  }
++
++  const clinicaSnap = await db.doc(`clinicas/${clinicaId}`).get();
++  const clinicaNome = clinicaSnap.data()?.nome || "sua clínica";
++  const primeiroNome = (conta.pacienteNome || "").split(" ")[0] || "";
++
++  try {
++    await enviarEmailResend({
++      para: conta.pacienteEmail,
++      assunto: `Comprovante do seu atendimento na ${clinicaNome}`,
++      html: `
++        <p>Olá, ${primeiroNome}!</p>
++        <p>Segue o comprovante do seu atendimento na ${clinicaNome}${conta.reembolsoConvenio ? " — você pode usar esse documento pra solicitar reembolso junto ao seu convênio" : ""}.</p>
++        <p><a href="${conta.comprovanteUrl}" style="display:inline-block;background:#0d9488;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">Ver comprovante</a></p>
++        <p style="color:#888;font-size:12px">Se o botão não funcionar, copie e cole este link no navegador: ${conta.comprovanteUrl}</p>
++      `,
++    });
++  } catch (err) {
++    logger.error("Falha ao enviar comprovante financeiro via Resend:", err);
++    throw new HttpsError("internal", "Não foi possível enviar o e-mail. Verifique a configuração do Resend (domínio verificado, RESEND_API_KEY).");
++  }
++
++  await contaRef.update({ comprovanteEnviadoEm: new Date().toISOString(), comprovanteEnviadoPor: request.auth.uid });
++
++  return { ok: true };
++});
++
+ // ---------------------------------------------------------------------
+ // Correção pontual: recalcular usuarios/{uid}.clinicaIds + custom claims
+ // de TODOS os usuários, direto da fonte de verdade (membros/{uid}.ativo)
+diff --git a/src/components/ConveniosServicosModal.jsx b/src/components/ConveniosServicosModal.jsx
+index 63f67a3..7c33663 100644
+--- a/src/components/ConveniosServicosModal.jsx
++++ b/src/components/ConveniosServicosModal.jsx
+@@ -1,5 +1,5 @@
+ import { useState } from "react";
+-import { X, Handshake, Stethoscope, Plus, Trash2, Loader2, Power, AlertTriangle } from "lucide-react";
++import { X, Handshake, Stethoscope, GraduationCap, Plus, Trash2, Loader2, Power, AlertTriangle } from "lucide-react";
+ import { useTenant } from "../context/TenantContext";
+ import { useFirestoreCollection, criarDocumento, atualizarDocumento, excluirDocumento } from "../lib/firestore";
+ 
+@@ -14,17 +14,20 @@ export default function ConveniosServicosModal({ open, onClose }) {
+       <div className="absolute inset-0 bg-ink-900/40" onClick={onClose} />
+       <div className="relative bg-white w-full max-w-lg max-h-[90vh] rounded-xl2 shadow-pop overflow-hidden animate-slideIn flex flex-col">
+         <div className="flex items-center justify-between px-5 py-4 bg-brand-600 text-white shrink-0">
+-          <span className="font-display font-semibold flex items-center gap-2"><Handshake size={18} /> Convênios e Serviços</span>
++          <span className="font-display font-semibold flex items-center gap-2"><Handshake size={18} /> Convênios, Serviços e Especialidades</span>
+           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/15 focus-ring"><X size={18} /></button>
+         </div>
+ 
+         <div className="flex border-b border-black/5 shrink-0">
+           <TabBtn active={aba === "convenios"} onClick={() => setAba("convenios")} icon={Handshake}>Convênios</TabBtn>
+           <TabBtn active={aba === "servicos"} onClick={() => setAba("servicos")} icon={Stethoscope}>Serviços</TabBtn>
++          <TabBtn active={aba === "especialidades"} onClick={() => setAba("especialidades")} icon={GraduationCap}>Especialidades</TabBtn>
+         </div>
+ 
+         <div className="overflow-y-auto p-5">
+-          {aba === "convenios" ? <ListaConvenios clinicaId={clinicaId} /> : <ListaServicos clinicaId={clinicaId} />}
++          {aba === "convenios" && <ListaConvenios clinicaId={clinicaId} />}
++          {aba === "servicos" && <ListaServicos clinicaId={clinicaId} />}
++          {aba === "especialidades" && <ListaEspecialidades clinicaId={clinicaId} />}
+         </div>
+       </div>
+     </div>
+@@ -149,6 +152,64 @@ function ListaServicos({ clinicaId }) {
+   );
+ }
+ 
++function ListaEspecialidades({ clinicaId }) {
++  const { data: especialidades, loading } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/especialidades` : null, "nome", "asc");
++  const [nome, setNome] = useState("");
++  const [salvando, setSalvando] = useState(false);
++  const [erro, setErro] = useState("");
++
++  async function adicionar(e) {
++    e.preventDefault();
++    setErro("");
++    if (!nome.trim()) return;
++    setSalvando(true);
++    try {
++      await criarDocumento(`clinicas/${clinicaId}/especialidades`, { nome: nome.trim(), ativo: true });
++      setNome("");
++    } catch (err) {
++      console.error("Erro ao criar especialidade:", err);
++      setErro(err.message || "Não foi possível salvar.");
++    } finally {
++      setSalvando(false);
++    }
++  }
++
++  async function alternarAtivo(e2) {
++    await atualizarDocumento(`clinicas/${clinicaId}/especialidades`, e2.id, { ativo: !e2.ativo });
++  }
++  async function remover(id) {
++    await excluirDocumento(`clinicas/${clinicaId}/especialidades`, id);
++  }
++
++  return (
++    <div className="space-y-4">
++      <p className="text-xs text-ink-500">Especialidades que aparecem pra escolher no agendamento — a clínica já vem com uma lista inicial das mais comuns, pra secretária não precisar digitar (e errar grafia). Desative as que não usa ou adicione outras aqui.</p>
++
++      <form onSubmit={adicionar} className="flex gap-2">
++        <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome da especialidade" className="flex-1 text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring" />
++        <button type="submit" disabled={salvando} className="flex items-center gap-1.5 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-xs font-semibold px-3.5 py-2 rounded-lg focus-ring shrink-0">
++          {salvando ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Adicionar
++        </button>
++      </form>
++      {erro && <div className="flex items-start gap-2 text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-3"><AlertTriangle size={13} className="mt-0.5 shrink-0" /> {erro}</div>}
++
++      <div className="space-y-1.5">
++        {loading && <div className="text-xs text-ink-500 flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Carregando…</div>}
++        {!loading && especialidades.length === 0 && <p className="text-xs text-ink-500 text-center py-4">Nenhuma especialidade cadastrada ainda — abra o agendamento uma vez pra clínica ser preenchida com a lista padrão automaticamente.</p>}
++        {especialidades.map((e2) => (
++          <div key={e2.id} className={`flex items-center gap-2 border border-black/5 rounded-lg p-2.5 ${e2.ativo === false ? "opacity-50" : ""}`}>
++            <span className="flex-1 text-sm text-ink-900">{e2.nome}</span>
++            <button onClick={() => alternarAtivo(e2)} title={e2.ativo === false ? "Reativar" : "Desativar"} className={`p-1.5 rounded-lg focus-ring ${e2.ativo === false ? "text-ink-500 hover:bg-gray-100" : "text-emerald-600 hover:bg-emerald-50"}`}>
++              <Power size={13} />
++            </button>
++            <button onClick={() => remover(e2.id)} className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 focus-ring"><Trash2 size={13} /></button>
++          </div>
++        ))}
++      </div>
++    </div>
++  );
++}
++
+ function TabBtn({ active, onClick, icon: Icon, children }) {
+   return (
+     <button onClick={onClick} className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium focus-ring relative ${active ? "text-brand-700" : "text-ink-500 hover:text-ink-900"}`}>
+diff --git a/src/components/agenda/AgendamentoModal.jsx b/src/components/agenda/AgendamentoModal.jsx
+index e8c9919..0e5edb1 100644
+--- a/src/components/agenda/AgendamentoModal.jsx
++++ b/src/components/agenda/AgendamentoModal.jsx
+@@ -12,6 +12,7 @@ import { enviarFotoPaciente } from "../../lib/storage";
+ import { ESTADOS_BR, buscarCidadesPorUf, buscarEnderecoPorCep } from "../../lib/enderecoBr";
+ import { abrirLinkWhatsapp, montarMensagemConfirmacao } from "../../lib/whatsapp";
+ import { maskCPF, maskCEP, maskCelular, cpfValido, emailValido, celularValido, cepValido, limparNome, LIMITES } from "../../lib/masks";
++import { semearEspecialidadesPadrao } from "../../lib/especialidades";
+ 
+ const TIPOS_CONSULTA = ["CONSULTA", "RETORNO", "PROCEDIMENTO", "EXAME", "TELECONSULTA"];
+ const TIPOS_ATENDIMENTO = ["Consulta simples", "Consulta + procedimento", "Encaixe", "Teleconsulta"];
+@@ -60,6 +61,7 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
+   const [salvando, setSalvando] = useState(false);
+   const [erro, setErro] = useState("");
+   const [confirmouSemCobranca, setConfirmouSemCobranca] = useState(false);
++  const [especialidadeLivre, setEspecialidadeLivre] = useState(false);
+ 
+   const [agendaForm, setAgendaForm] = useState(() => ({
+     data: dateISO,
+@@ -77,6 +79,23 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
+ 
+   const { data: convenios } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/convenios` : null, "nome", "asc");
+   const { data: servicos } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/servicos` : null, "nome", "asc");
++  const { data: especialidades, loading: carregandoEspecialidades } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/especialidades` : null, "nome", "asc");
++
++  // Preenche a clínica com uma lista padrão de especialidades na primeira
++  // vez que alguém agenda e a coleção ainda está vazia — evita que a
++  // secretária tenha que digitar especialidade livremente (e errar
++  // grafia). Depois disso é 100% editável em Configurações.
++  const especialidadesAtivas = especialidades.filter((e) => e.ativo !== false);
++
++  // Preenche a clínica com uma lista padrão de especialidades na primeira
++  // vez que alguém agenda e a coleção ainda está vazia — evita que a
++  // secretária tenha que digitar especialidade livremente (e errar
++  // grafia). Depois disso é 100% editável em Configurações.
++  useEffect(() => {
++    if (!clinicaId || carregandoEspecialidades || especialidades.length > 0) return;
++    semearEspecialidadesPadrao(clinicaId).catch((err) => console.error("Erro ao semear especialidades padrão:", err));
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [clinicaId, carregandoEspecialidades, especialidades.length]);
+ 
+   // Histórico de agendamentos do paciente selecionado — alimenta os
+   // indicadores (1ª consulta, dias desde a última, faltas, cancelamentos).
+@@ -421,7 +440,29 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
+             <SelectField label="Tipo consulta" value={agendaForm.tipoConsulta} onChange={(v) => setAgendaForm({ ...agendaForm, tipoConsulta: v })} options={TIPOS_CONSULTA} />
+           </div>
+           <div className="grid grid-cols-2 gap-3">
+-            <Field label="Especialidade" value={agendaForm.especialidade} onChange={(v) => setAgendaForm({ ...agendaForm, especialidade: v })} />
++            {especialidadeLivre ? (
++              <label className="block text-xs">
++                <span className="text-ink-500 font-medium">Especialidade</span>
++                <input
++                  value={agendaForm.especialidade}
++                  maxLength={80}
++                  onChange={(e) => setAgendaForm({ ...agendaForm, especialidade: e.target.value })}
++                  className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring"
++                />
++                <button type="button" onClick={() => setEspecialidadeLivre(false)} className="text-[10px] text-brand-600 hover:text-brand-700 font-semibold mt-1">
++                  ← Escolher da lista
++                </button>
++              </label>
++            ) : (
++              <SelectField
++                label="Especialidade"
++                value={agendaForm.especialidade}
++                onChange={(v) => (v === "__outra__" ? setEspecialidadeLivre(true) : setAgendaForm({ ...agendaForm, especialidade: v }))}
++                options={[...especialidadesAtivas.map((e) => e.nome), "__outra__"]}
++                labels={{ __outra__: "Outra (digitar)…" }}
++                placeholder={carregandoEspecialidades ? "Carregando…" : "Selecione"}
++              />
++            )}
+             <SelectField label="Tipo atendimento" value={agendaForm.tipoAtendimento} onChange={(v) => setAgendaForm({ ...agendaForm, tipoAtendimento: v })} options={TIPOS_ATENDIMENTO} />
+           </div>
+           <div className="grid grid-cols-2 gap-3">
+diff --git a/src/components/atendimento/Antropometria.jsx b/src/components/atendimento/Antropometria.jsx
+index 3ce647b..fb7415e 100644
+--- a/src/components/atendimento/Antropometria.jsx
++++ b/src/components/atendimento/Antropometria.jsx
+@@ -2,7 +2,10 @@ import { useState } from "react";
+ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+ import { TrendingUp, Loader2, Save } from "lucide-react";
+ import { useTenant } from "../../context/TenantContext";
++import { useAuth } from "../../context/AuthContext";
+ import { useFirestoreCollection, criarDocumento } from "../../lib/firestore";
++import { registrarHistoricoClinico } from "../../lib/historicoClinico";
++import HistoricoClinicoLista from "./HistoricoClinicoLista";
+ 
+ const camposNumericos = [
+   { key: "peso", label: "Peso", unit: "kg" },
+@@ -14,7 +17,8 @@ const camposNumericos = [
+ ];
+ 
+ export default function Antropometria() {
+-  const { pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
++  const { clinicaId, pacienteId, pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
++  const { user } = useAuth();
+   const { data: historico, loading } = useFirestoreCollection(`${pacientePath}/antropometria`, "criadoEm", "asc");
+   const [form, setForm] = useState({});
+   const [salvando, setSalvando] = useState(false);
+@@ -38,6 +42,17 @@ export default function Antropometria() {
+         profissionalId,
+         ativo: true,
+       });
++      const resumo = camposNumericos
++        .filter((f) => form[f.key])
++        .map((f) => `${f.label} ${form[f.key]} ${f.unit}`)
++        .concat(imc ? [`IMC ${imc}`] : [])
++        .join(", ");
++      if (resumo) {
++        registrarHistoricoClinico(clinicaId, pacienteId, {
++          tipo: "medidas", acao: "registrou", resumo,
++          uid: user?.uid, nomeUsuario: user?.displayName || user?.email, atendimentoId,
++        });
++      }
+       setForm({});
+     } finally {
+       setSalvando(false);
+@@ -100,6 +115,8 @@ export default function Antropometria() {
+           </ResponsiveContainer>
+         )}
+       </div>
++
++      <HistoricoClinicoLista tipo="medidas" className="lg:col-span-2" />
+     </div>
+   );
+ }
+diff --git a/src/components/atendimento/HistoricoClinicoLista.jsx b/src/components/atendimento/HistoricoClinicoLista.jsx
+new file mode 100644
+index 0000000..daf482f
+--- /dev/null
++++ b/src/components/atendimento/HistoricoClinicoLista.jsx
+@@ -0,0 +1,79 @@
++import { useMemo, useState } from "react";
++import { History, Loader2 } from "lucide-react";
++import { useTenant } from "../../context/TenantContext";
++import { useFirestoreQuery, where, orderBy } from "../../lib/firestore";
++
++const PERIODOS = [
++  { label: "Últimos 7 dias", dias: 7 },
++  { label: "Últimos 30 dias", dias: 30 },
++  { label: "Últimos 90 dias", dias: 90 },
++  { label: "Tudo", dias: null },
++];
++
++/** Lista de alterações clínicas (quem, quando, o quê) com filtro por
++ * período — usada dentro das abas de Sinais Vitais, Medidas e Doenças
++ * Pré-existentes / Vícios pra dar visibilidade rápida das mudanças ao
++ * longo do tempo, sem precisar abrir cada registro um a um. */
++export default function HistoricoClinicoLista({ tipo, className = "" }) {
++  const { clinicaId, pacienteId } = useTenant();
++  const { data: registros, loading } = useFirestoreQuery(
++    clinicaId && pacienteId ? `clinicas/${clinicaId}/pacientes/${pacienteId}/historicoClinico` : null,
++    [where("tipo", "==", tipo), orderBy("criadoEm", "desc")],
++    [clinicaId, pacienteId, tipo]
++  );
++  const [periodo, setPeriodo] = useState(PERIODOS[1]);
++  // Data de corte calculada só quando o período muda (não a cada render) —
++  // evita chamar Date.now() dentro do useMemo de filtragem.
++  const [limite, setLimite] = useState(() => Date.now() - PERIODOS[1].dias * 24 * 60 * 60 * 1000);
++
++  function selecionarPeriodo(p) {
++    setPeriodo(p);
++    setLimite(p.dias ? Date.now() - p.dias * 24 * 60 * 60 * 1000 : null);
++  }
++
++  const filtrados = useMemo(() => {
++    if (!limite) return registros;
++    return registros.filter((r) => r.criadoEm?.toDate && r.criadoEm.toDate().getTime() >= limite);
++  }, [registros, limite]);
++
++  return (
++    <div className={`card p-4 ${className}`}>
++      <div className="flex items-center gap-2 mb-3 flex-wrap">
++        <History size={15} className="text-brand-500" />
++        <span className="text-sm font-display font-semibold text-ink-900">Histórico de alterações</span>
++        <select
++          value={periodo.label}
++          onChange={(e) => selecionarPeriodo(PERIODOS.find((p) => p.label === e.target.value) || PERIODOS[1])}
++          className="ml-auto text-xs border border-black/10 rounded-lg px-2 py-1 focus-ring"
++        >
++          {PERIODOS.map((p) => <option key={p.label}>{p.label}</option>)}
++        </select>
++      </div>
++      {loading && (
++        <div className="text-xs text-ink-500 flex items-center gap-2 py-4 justify-center"><Loader2 size={13} className="animate-spin" /> Carregando…</div>
++      )}
++      {!loading && filtrados.length === 0 && (
++        <p className="text-xs text-ink-500 py-4 text-center">Nenhuma alteração registrada nesse período.</p>
++      )}
++      {!loading && filtrados.length > 0 && (
++        <ul className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
++          {filtrados.map((r) => (
++            <li key={r.id} className="text-xs border-l-2 border-brand-200 pl-2.5 py-0.5">
++              <div className="flex items-center gap-2 flex-wrap">
++                <span className="font-semibold text-ink-900">{formatarData(r.criadoEm)}</span>
++                <span className="text-ink-500">· {r.nomeUsuario}</span>
++              </div>
++              <div className="text-ink-700 mt-0.5">{r.resumo}</div>
++            </li>
++          ))}
++        </ul>
++      )}
++    </div>
++  );
++}
++
++function formatarData(ts) {
++  if (!ts?.toDate) return "agora";
++  const d = ts.toDate();
++  return `${d.toLocaleDateString("pt-BR")} ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
++}
+diff --git a/src/components/atendimento/Problemas.jsx b/src/components/atendimento/Problemas.jsx
+index 476d490..c7b7dfa 100644
+--- a/src/components/atendimento/Problemas.jsx
++++ b/src/components/atendimento/Problemas.jsx
+@@ -2,7 +2,10 @@ import { useState } from "react";
+ import { Search, ArrowUpDown, MoreVertical, Plus, Loader2 } from "lucide-react";
+ import { problemChips } from "../../data/mockData";
+ import { useTenant } from "../../context/TenantContext";
++import { useAuth } from "../../context/AuthContext";
+ import { useFirestoreCollection, criarDocumento, alternarAtivo, atualizarDocumento } from "../../lib/firestore";
++import { registrarHistoricoClinico } from "../../lib/historicoClinico";
++import HistoricoClinicoLista from "./HistoricoClinicoLista";
+ import Cid10Picker from "./Cid10Picker";
+ 
+ const grauStyle = {
+@@ -13,11 +16,19 @@ const grauStyle = {
+ };
+ 
+ export default function Problemas() {
+-  const { pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
++  const { clinicaId, pacienteId, pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
++  const { user } = useAuth();
+   const { data: rows, loading } = useFirestoreCollection(`${pacientePath}/problemas`);
+   const [novo, setNovo] = useState({ cid: "", descricao: "", grau: "SEM CLASSIFICAÇÃO" });
+   const [salvando, setSalvando] = useState(false);
+ 
++  function logHistorico(acao, resumo) {
++    registrarHistoricoClinico(clinicaId, pacienteId, {
++      tipo: "problemas", acao, resumo,
++      uid: user?.uid, nomeUsuario: user?.displayName || user?.email, atendimentoId,
++    });
++  }
++
+   async function adicionar() {
+     if (!novo.descricao.trim() || !firebaseConfigured) return;
+     setSalvando(true);
+@@ -29,6 +40,7 @@ export default function Problemas() {
+         atendimentoId,
+         profissionalId,
+       });
++      logHistorico("registrou", `Adicionado: ${novo.cid ? `${novo.cid} — ` : ""}${novo.descricao} (${novo.grau})`);
+       setNovo({ cid: "", descricao: "", grau: "SEM CLASSIFICAÇÃO" });
+     } finally {
+       setSalvando(false);
+@@ -104,15 +116,33 @@ export default function Problemas() {
+                 <Td>
+                   <input
+                     defaultValue={r.observacao}
+-                    onBlur={(e) => e.target.value !== r.observacao && atualizarDocumento(`${pacientePath}/problemas`, r.id, { observacao: e.target.value })}
++                    onBlur={(e) => {
++                      if (e.target.value === r.observacao) return;
++                      atualizarDocumento(`${pacientePath}/problemas`, r.id, { observacao: e.target.value });
++                      logHistorico("editou", `Observação alterada em "${r.descricao}": ${e.target.value || "(em branco)"}`);
++                    }}
+                     className="w-full text-xs border border-black/10 rounded px-2 py-1 focus-ring"
+                   />
+                 </Td>
+                 <Td>
+-                  <input type="checkbox" checked={r.ativo} onChange={() => alternarAtivo(`${pacientePath}/problemas`, r.id, !r.ativo)} className="rounded accent-brand-600" />
++                  <input
++                    type="checkbox"
++                    checked={r.ativo}
++                    onChange={() => {
++                      alternarAtivo(`${pacientePath}/problemas`, r.id, !r.ativo);
++                      logHistorico(r.ativo ? "inativou" : "registrou", `${r.ativo ? "Inativado" : "Reativado"}: ${r.descricao}`);
++                    }}
++                    className="rounded accent-brand-600"
++                  />
+                 </Td>
+                 <Td>
+-                  <button onClick={() => alternarAtivo(`${pacientePath}/problemas`, r.id, false)} className="bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-semibold px-3 py-1 rounded-md focus-ring">
++                  <button
++                    onClick={() => {
++                      alternarAtivo(`${pacientePath}/problemas`, r.id, false);
++                      logHistorico("inativou", `Inativado: ${r.descricao}`);
++                    }}
++                    className="bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-semibold px-3 py-1 rounded-md focus-ring"
++                  >
+                     Inativar
+                   </button>
+                 </Td>
+@@ -121,6 +151,8 @@ export default function Problemas() {
+           </tbody>
+         </table>
+       </div>
++
++      <HistoricoClinicoLista tipo="problemas" />
+     </div>
+   );
+ }
+diff --git a/src/components/atendimento/SinaisVitais.jsx b/src/components/atendimento/SinaisVitais.jsx
+index 79229c5..304e919 100644
+--- a/src/components/atendimento/SinaisVitais.jsx
++++ b/src/components/atendimento/SinaisVitais.jsx
+@@ -2,7 +2,10 @@ import { useState } from "react";
+ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
+ import { Activity, Loader2, Save } from "lucide-react";
+ import { useTenant } from "../../context/TenantContext";
++import { useAuth } from "../../context/AuthContext";
+ import { useFirestoreCollection, criarDocumento } from "../../lib/firestore";
++import { registrarHistoricoClinico } from "../../lib/historicoClinico";
++import HistoricoClinicoLista from "./HistoricoClinicoLista";
+ 
+ // Sinais vitais "de verdade" — os parâmetros fisiológicos clássicos
+ // aferidos numa consulta. Medidas antropométricas (peso, altura, IMC,
+@@ -20,7 +23,8 @@ const camposNumericos = [
+ ];
+ 
+ export default function SinaisVitais() {
+-  const { pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
++  const { clinicaId, pacienteId, pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
++  const { user } = useAuth();
+   const { data: historico, loading } = useFirestoreCollection(`${pacientePath}/sinaisVitais`, "criadoEm", "asc");
+   const [form, setForm] = useState({});
+   const [salvando, setSalvando] = useState(false);
+@@ -35,6 +39,16 @@ export default function SinaisVitais() {
+         profissionalId,
+         ativo: true,
+       });
++      const resumo = camposNumericos
++        .filter((f) => form[f.key])
++        .map((f) => `${f.label} ${form[f.key]} ${f.unit}`)
++        .join(", ");
++      if (resumo) {
++        registrarHistoricoClinico(clinicaId, pacienteId, {
++          tipo: "sinaisVitais", acao: "registrou", resumo,
++          uid: user?.uid, nomeUsuario: user?.displayName || user?.email, atendimentoId,
++        });
++      }
+       setForm({});
+     } finally {
+       setSalvando(false);
+@@ -93,6 +107,8 @@ export default function SinaisVitais() {
+           </ResponsiveContainer>
+         )}
+       </div>
++
++      <HistoricoClinicoLista tipo="sinaisVitais" className="lg:col-span-2" />
+     </div>
+   );
+ }
+diff --git a/src/lib/avaliacoes.js b/src/lib/avaliacoes.js
+index 42a4c77..63c9976 100644
+--- a/src/lib/avaliacoes.js
++++ b/src/lib/avaliacoes.js
+@@ -9,3 +9,13 @@ export async function enviarAvaliacaoPaciente(clinicaId, pacienteId, atendimento
+   const { data } = await chamar({ clinicaId, pacienteId, atendimentoId: atendimentoId || null });
+   return data; // { ok, avaliacaoId }
+ }
++
++/** Envia por e-mail (mesma infra Resend) o comprovante de pagamento
++ * anexado a um lançamento do Financeiro — ver enviarComprovanteFinanceiro
++ * em functions/index.js. */
++export async function enviarComprovanteFinanceiro(clinicaId, contaId) {
++  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
++  const chamar = httpsCallable(functionsInstance, "enviarComprovanteFinanceiro");
++  const { data } = await chamar({ clinicaId, contaId });
++  return data; // { ok }
++}
+diff --git a/src/lib/especialidades.js b/src/lib/especialidades.js
+new file mode 100644
+index 0000000..785bdc1
+--- /dev/null
++++ b/src/lib/especialidades.js
+@@ -0,0 +1,35 @@
++import { criarDocumento } from "./firestore";
++
++// Lista inicial de especialidades — carimbada automaticamente na clínica
++// na primeira vez que alguém abre o agendamento e a coleção ainda está
++// vazia (ver `useEspecialidadesComSeed` abaixo). Depois disso, o cadastro
++// vira 100% gerenciável em Configurações → Convênios e Serviços →
++// Especialidades (pode desativar as que não usa e adicionar outras).
++export const ESPECIALIDADES_PADRAO = [
++  "Clínica Geral",
++  "Pediatria",
++  "Ginecologia e Obstetrícia",
++  "Cardiologia",
++  "Dermatologia",
++  "Ortopedia e Traumatologia",
++  "Psiquiatria",
++  "Endocrinologia",
++  "Neurologia",
++  "Oftalmologia",
++  "Otorrinolaringologia",
++  "Urologia",
++  "Gastroenterologia",
++  "Nutrição",
++  "Psicologia",
++  "Fisioterapia",
++  "Odontologia",
++  "Geriatria",
++  "Reumatologia",
++  "Pneumologia",
++];
++
++export async function semearEspecialidadesPadrao(clinicaId) {
++  await Promise.all(
++    ESPECIALIDADES_PADRAO.map((nome) => criarDocumento(`clinicas/${clinicaId}/especialidades`, { nome, ativo: true }))
++  );
++}
+diff --git a/src/lib/historicoClinico.js b/src/lib/historicoClinico.js
+new file mode 100644
+index 0000000..5555eef
+--- /dev/null
++++ b/src/lib/historicoClinico.js
+@@ -0,0 +1,33 @@
++import { criarDocumento } from "./firestore";
++
++/** Registra uma alteração em dado clínico (sinais vitais, medidas,
++ * doenças pré-existentes/vícios etc.) formando uma trilha de auditoria
++ * visível na própria aba — complementar ao logsAcesso.js, que só registra
++ * QUEM ABRIU o prontuário, nunca O QUE foi alterado dentro dele. Cada
++ * registro clínico já é imutável por natureza (cada "salvar" cria um
++ * documento novo, nunca sobrescreve o anterior), mas isso sozinho não
++ * aparecia em lugar nenhum da UI — daí esse log específico, com um resumo
++ * pronto pra exibir numa lista.
++ * Silencioso em caso de falha, mesma lógica do logsAcesso: um erro aqui
++ * não deve travar o atendimento por causa de um log. */
++export async function registrarHistoricoClinico(clinicaId, pacienteId, { tipo, acao, resumo, uid, nomeUsuario, atendimentoId }) {
++  if (!clinicaId || !pacienteId) return;
++  try {
++    await criarDocumento(`clinicas/${clinicaId}/pacientes/${pacienteId}/historicoClinico`, {
++      tipo, // "sinaisVitais" | "medidas" | "problemas"
++      acao, // "registrou" | "editou" | "inativou"
++      resumo,
++      uid: uid || null,
++      nomeUsuario: nomeUsuario || "—",
++      atendimentoId: atendimentoId || null,
++    });
++  } catch (err) {
++    console.error("Erro ao registrar histórico clínico:", err);
++  }
++}
++
++export const TIPO_LABEL = {
++  sinaisVitais: "Sinais Vitais",
++  medidas: "Medidas",
++  problemas: "Doenças Pré-existentes / Vícios",
++};
+diff --git a/src/lib/storage.js b/src/lib/storage.js
+index 26aed4f..a758133 100644
+--- a/src/lib/storage.js
++++ b/src/lib/storage.js
+@@ -12,6 +12,16 @@ export async function enviarFotoPaciente(clinicaId, pacienteId, file) {
+   return getDownloadURL(storageRef);
+ }
+ 
++/** Envia o comprovante de pagamento (recibo/print da maquininha etc.) de
++ * uma conta a receber Particular — controle interno, fica anexado ao
++ * lançamento no Financeiro. */
++export async function enviarComprovantePagamento(clinicaId, contaId, file) {
++  const path = `clinicas/${clinicaId}/financeiro/${contaId}/comprovante_${Date.now()}_${file.name}`;
++  const storageRef = ref(storage, path);
++  await uploadBytes(storageRef, file);
++  return getDownloadURL(storageRef);
++}
++
+ /** Envia a foto de perfil de um profissional (mostrada na Topbar, ao lado
+  * do nome) para o Storage e devolve a URL pública. */
+ export async function enviarFotoProfissional(clinicaId, profissionalId, file) {
+diff --git a/src/lib/whatsapp.js b/src/lib/whatsapp.js
+index 279a4ba..760bc25 100644
+--- a/src/lib/whatsapp.js
++++ b/src/lib/whatsapp.js
+@@ -39,6 +39,12 @@ export function montarMensagemTriagem(pacienteNome, link) {
+   return `Olá, ${primeiroNome}! Antes da sua consulta, pedimos que preencha esse formulário rápido: ${link}\n\nLeva só alguns minutos e ajuda o médico a já chegar com mais informações sobre você. Obrigado!`;
+ }
+ 
++/** Mensagem pra mandar o comprovante/NFS-e de um atendimento pro paciente. */
++export function montarMensagemComprovante(pacienteNome, link) {
++  const primeiroNome = (pacienteNome || "").split(" ")[0];
++  return `Olá, ${primeiroNome}! Segue o comprovante/nota fiscal do seu atendimento: ${link}\n\nSe você tem convênio com reembolso, pode usar esse documento pra solicitar junto ao seu plano. Qualquer dúvida, estamos à disposição.`;
++}
++
+ /** Abre o WhatsApp Web/App com a mensagem já pronta para o número informado.
+  * Não é uma API de envio automático — ainda precisa de um clique manual
+  * dentro do WhatsApp para efetivamente enviar. */
+diff --git a/src/pages/Config.jsx b/src/pages/Config.jsx
+index fdfbac2..5e12216 100644
+--- a/src/pages/Config.jsx
++++ b/src/pages/Config.jsx
+@@ -14,7 +14,7 @@ import { SlidersHorizontal, FileSignature, ListTodo, UserCog, FileText, Users, H
+ const cards = [
+   { icon: SlidersHorizontal, title: "Preferências", desc: "Ajuste suas configurações de trabalho e o layout do prontuário." },
+   { icon: Users, title: "Equipe", desc: "Convide médicos, secretárias e financeiro pra esta clínica." },
+-  { icon: Handshake, title: "Convênios e Serviços", desc: "Cadastre os convênios aceitos e os tipos de serviço com seus valores." },
++  { icon: Handshake, title: "Convênios e Serviços", desc: "Cadastre os convênios aceitos, os tipos de serviço com seus valores e as especialidades do agendamento." },
+   { icon: FileEdit, title: "Formulários de Avaliação", desc: "Monte os formulários que sua equipe aplica nos pacientes, com score." },
+   { icon: FileSignature, title: "Certificado Digital", desc: "Configure aqui seu certificado digital para assinaturas e NFS-e." },
+   { icon: Landmark, title: "Dados Fiscais", desc: "CNPJ, Inscrição Municipal e códigos usados na emissão de NFS-e." },
+diff --git a/src/pages/Financeiro.jsx b/src/pages/Financeiro.jsx
+index 21bbb27..fb8f3d5 100644
+--- a/src/pages/Financeiro.jsx
++++ b/src/pages/Financeiro.jsx
+@@ -1,13 +1,26 @@
+-import { useState } from "react";
++import { useMemo, useState } from "react";
+ import Topbar from "../components/Topbar";
+-import { ArrowDownCircle, ArrowUpCircle, Wallet, CheckCircle2, Clock3, Plus, Loader2 } from "lucide-react";
++import {
++  ArrowDownCircle, ArrowUpCircle, Wallet, CheckCircle2, Clock3, Plus, Loader2,
++  Search, ChevronLeft, ChevronRight, Paperclip, Mail, MessageCircle, X, AlertTriangle,
++} from "lucide-react";
+ import { useTenant } from "../context/TenantContext";
+ import { useFirestoreCollection, criarDocumento, atualizarDocumento } from "../lib/firestore";
++import { enviarComprovantePagamento } from "../lib/storage";
++import { enviarComprovanteFinanceiro } from "../lib/avaliacoes";
++import { abrirLinkWhatsapp, montarMensagemComprovante } from "../lib/whatsapp";
++import { emailValido } from "../lib/masks";
++
++const ITENS_POR_PAGINA = 10;
+ 
+ export default function Financeiro() {
+   const { clinicaId, firebaseConfigured } = useTenant();
+   const [tab, setTab] = useState("receber");
+   const [showForm, setShowForm] = useState(false);
++  const [filtroTexto, setFiltroTexto] = useState("");
++  const [filtroDe, setFiltroDe] = useState("");
++  const [filtroAte, setFiltroAte] = useState("");
++  const [pagina, setPagina] = useState(1);
+ 
+   const colName = tab === "receber" ? "contasReceber" : "contasPagar";
+   const { data: rows, loading, error } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/${colName}` : null, "vencimento", "asc");
+@@ -15,6 +28,23 @@ export default function Financeiro() {
+   const totalReceberAberto = useTotalAberto(clinicaId, "contasReceber");
+   const totalPagarAberto = useTotalAberto(clinicaId, "contasPagar");
+ 
++  const filtradas = useMemo(() => {
++    const txt = filtroTexto.trim().toLowerCase();
++    return rows.filter((r) => {
++      if (txt && !`${r.descricao || ""} ${r.pacienteNome || ""}`.toLowerCase().includes(txt)) return false;
++      if (filtroDe && (!r.vencimento || r.vencimento < filtroDe)) return false;
++      if (filtroAte && (!r.vencimento || r.vencimento > filtroAte)) return false;
++      return true;
++    });
++  }, [rows, filtroTexto, filtroDe, filtroAte]);
++
++  const totalPaginas = Math.max(1, Math.ceil(filtradas.length / ITENS_POR_PAGINA));
++  const paginaAtual = Math.min(pagina, totalPaginas);
++  const paginaRows = filtradas.slice((paginaAtual - 1) * ITENS_POR_PAGINA, paginaAtual * ITENS_POR_PAGINA);
++
++  function mudarTab(t) { setTab(t); setPagina(1); }
++  function limparFiltros() { setFiltroTexto(""); setFiltroDe(""); setFiltroAte(""); setPagina(1); }
++
+   async function marcarPago(id) {
+     await atualizarDocumento(`clinicas/${clinicaId}/${colName}`, id, { status: "pago" });
+   }
+@@ -30,52 +60,119 @@ export default function Financeiro() {
+         </div>
+ 
+         <div className="card overflow-hidden">
+-          <div className="flex items-center justify-between border-b border-black/5">
++          <div className="flex items-center justify-between border-b border-black/5 flex-wrap gap-2">
+             <div className="flex">
+-              <TabBtn active={tab === "receber"} onClick={() => setTab("receber")}>Contas a Receber</TabBtn>
+-              <TabBtn active={tab === "pagar"} onClick={() => setTab("pagar")}>Contas a Pagar</TabBtn>
++              <TabBtn active={tab === "receber"} onClick={() => mudarTab("receber")}>Contas a Receber</TabBtn>
++              <TabBtn active={tab === "pagar"} onClick={() => mudarTab("pagar")}>Contas a Pagar</TabBtn>
+             </div>
+             <button onClick={() => setShowForm(true)} disabled={!firebaseConfigured} className="mr-3 flex items-center gap-1.5 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-xs font-semibold px-3.5 py-2 rounded-lg focus-ring">
+               <Plus size={14} /> Nova conta
+             </button>
+           </div>
++
++          <div className="flex flex-wrap items-center gap-2 p-3 border-b border-black/5 bg-gray-50/50">
++            <div className="relative flex-1 min-w-[180px] max-w-xs">
++              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-500" />
++              <input
++                value={filtroTexto}
++                onChange={(e) => { setFiltroTexto(e.target.value); setPagina(1); }}
++                placeholder="Buscar por descrição ou paciente…"
++                className="w-full text-xs border border-black/10 rounded-lg pl-7 pr-2.5 py-1.5 focus-ring"
++              />
++            </div>
++            <label className="flex items-center gap-1.5 text-[11px] text-ink-500">
++              Vencimento de
++              <input type="date" value={filtroDe} onChange={(e) => { setFiltroDe(e.target.value); setPagina(1); }} className="text-xs border border-black/10 rounded-lg px-2 py-1 focus-ring" />
++            </label>
++            <label className="flex items-center gap-1.5 text-[11px] text-ink-500">
++              até
++              <input type="date" value={filtroAte} onChange={(e) => { setFiltroAte(e.target.value); setPagina(1); }} className="text-xs border border-black/10 rounded-lg px-2 py-1 focus-ring" />
++            </label>
++            {(filtroTexto || filtroDe || filtroAte) && (
++              <button onClick={limparFiltros} className="text-[11px] font-semibold text-brand-600 hover:text-brand-700 ml-auto">Limpar filtros</button>
++            )}
++          </div>
++
+           {loading ? (
+             <div className="p-8 flex justify-center text-ink-500 text-sm gap-2"><Loader2 size={16} className="animate-spin" /> Carregando…</div>
+           ) : error?.code === "permission-denied" ? (
+             <div className="p-8 text-center text-sm text-ink-500">
+               Seu usuário não tem permissão para ver o financeiro desta clínica — é preciso papel <span className="font-semibold">admin</span> ou <span className="font-semibold">financeiro</span> em <code className="font-mono text-xs">membros</code>.
+             </div>
+-          ) : rows.length === 0 ? (
+-            <div className="p-8 text-center text-sm text-ink-500">Nenhuma conta cadastrada.</div>
++          ) : filtradas.length === 0 ? (
++            <div className="p-8 text-center text-sm text-ink-500">
++              {rows.length === 0 ? "Nenhuma conta cadastrada." : "Nenhuma conta encontrada com esses filtros."}
++            </div>
+           ) : (
+-            <table className="w-full text-xs">
+-              <thead>
+-                <tr className="text-left text-ink-500 border-b border-black/5">
+-                  <Th>Descrição</Th><Th>Vencimento</Th><Th>Valor</Th><Th>Status</Th><Th></Th>
+-                </tr>
+-              </thead>
+-              <tbody>
+-                {rows.map((r) => (
+-                  <tr key={r.id} className="border-b border-black/5 last:border-0">
+-                    <Td className="font-medium text-ink-900">{r.descricao}</Td>
+-                    <Td>{r.vencimento}</Td>
+-                    <Td>{formatarMoeda(r.valor)}</Td>
+-                    <Td>
+-                      {r.status === "pago" ? (
+-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full"><CheckCircle2 size={11} /> Pago</span>
+-                      ) : (
+-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full"><Clock3 size={11} /> Pendente</span>
+-                      )}
+-                    </Td>
+-                    <Td>
+-                      {r.status !== "pago" && (
+-                        <button onClick={() => marcarPago(r.id)} className="text-[11px] font-semibold text-brand-600 hover:text-brand-700">Marcar como pago</button>
+-                      )}
+-                    </Td>
++            <>
++              <table className="w-full text-xs">
++                <thead>
++                  <tr className="text-left text-ink-500 border-b border-black/5">
++                    <Th>Descrição</Th>
++                    {tab === "receber" && <Th>Paciente</Th>}
++                    <Th>Vencimento</Th>
++                    <Th>Valor</Th>
++                    {tab === "receber" && <Th>Convênio</Th>}
++                    <Th>Status</Th>
++                    <Th></Th>
+                   </tr>
+-                ))}
+-              </tbody>
+-            </table>
++                </thead>
++                <tbody>
++                  {paginaRows.map((r) => (
++                    <tr key={r.id} className="border-b border-black/5 last:border-0">
++                      <Td className="font-medium text-ink-900">{r.descricao}</Td>
++                      {tab === "receber" && <Td>{r.pacienteNome || "—"}</Td>}
++                      <Td>{formatarDataBR(r.vencimento)}</Td>
++                      <Td>{formatarMoeda(r.valor)}</Td>
++                      {tab === "receber" && (
++                        <Td>
++                          {r.convenioNome ? (
++                            <span className="inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full bg-brand-50 text-brand-700">{r.convenioNome}{r.reembolsoConvenio ? " · reembolso" : ""}</span>
++                          ) : (
++                            <span className="text-ink-500">Particular</span>
++                          )}
++                        </Td>
++                      )}
++                      <Td>
++                        {r.status === "pago" ? (
++                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full"><CheckCircle2 size={11} /> Pago</span>
++                        ) : (
++                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full"><Clock3 size={11} /> Pendente</span>
++                        )}
++                      </Td>
++                      <Td>
++                        <div className="flex items-center gap-2 justify-end">
++                          {r.status !== "pago" && (
++                            <button onClick={() => marcarPago(r.id)} className="text-[11px] font-semibold text-brand-600 hover:text-brand-700">Marcar como pago</button>
++                          )}
++                          {tab === "receber" && r.comprovanteUrl && (
++                            <a href={r.comprovanteUrl} target="_blank" rel="noopener noreferrer" title="Ver comprovante" className="p-1 rounded text-ink-500 hover:text-brand-600 hover:bg-brand-50 focus-ring">
++                              <Paperclip size={13} />
++                            </a>
++                          )}
++                          {tab === "receber" && r.comprovanteUrl && (
++                            <AcoesEnvio clinicaId={clinicaId} conta={r} />
++                          )}
++                        </div>
++                      </Td>
++                    </tr>
++                  ))}
++                </tbody>
++              </table>
++              {totalPaginas > 1 && (
++                <div className="flex items-center justify-between px-4 py-3 border-t border-black/5">
++                  <span className="text-[11px] text-ink-500">Página {paginaAtual} de {totalPaginas} · {filtradas.length} conta(s)</span>
++                  <div className="flex items-center gap-1.5">
++                    <button onClick={() => setPagina((p) => Math.max(1, p - 1))} disabled={paginaAtual === 1} className="p-1.5 rounded-lg border border-black/10 text-ink-500 disabled:opacity-40 focus-ring">
++                      <ChevronLeft size={14} />
++                    </button>
++                    <button onClick={() => setPagina((p) => Math.min(totalPaginas, p + 1))} disabled={paginaAtual === totalPaginas} className="p-1.5 rounded-lg border border-black/10 text-ink-500 disabled:opacity-40 focus-ring">
++                      <ChevronRight size={14} />
++                    </button>
++                  </div>
++                </div>
++              )}
++            </>
+           )}
+         </div>
+       </main>
+@@ -87,6 +184,47 @@ export default function Financeiro() {
+   );
+ }
+ 
++/** Botões de enviar o comprovante por e-mail (Cloud Function + Resend) ou
++ * WhatsApp (link manual, mesma infra já usada nos lembretes de consulta) —
++ * só aparecem quando já tem comprovante anexado. */
++function AcoesEnvio({ clinicaId, conta }) {
++  const [enviando, setEnviando] = useState(false);
++  const [feedback, setFeedback] = useState("");
++
++  async function enviarEmail() {
++    if (!conta.pacienteEmail) { setFeedback("Sem e-mail cadastrado"); setTimeout(() => setFeedback(""), 2500); return; }
++    setEnviando(true);
++    setFeedback("");
++    try {
++      await enviarComprovanteFinanceiro(clinicaId, conta.id);
++      setFeedback("Enviado!");
++    } catch (err) {
++      console.error("Erro ao enviar comprovante por e-mail:", err);
++      setFeedback(err.message || "Falha ao enviar");
++    } finally {
++      setEnviando(false);
++      setTimeout(() => setFeedback(""), 3000);
++    }
++  }
++
++  function enviarWhatsapp() {
++    const ok = abrirLinkWhatsapp(conta.pacienteCelular, montarMensagemComprovante(conta.pacienteNome, conta.comprovanteUrl));
++    if (!ok) { setFeedback("Sem celular cadastrado"); setTimeout(() => setFeedback(""), 2500); }
++  }
++
++  return (
++    <div className="flex items-center gap-1.5">
++      <button onClick={enviarEmail} disabled={enviando} title="Enviar por e-mail" className="p-1 rounded text-ink-500 hover:text-brand-600 hover:bg-brand-50 focus-ring disabled:opacity-50">
++        {enviando ? <Loader2 size={13} className="animate-spin" /> : <Mail size={13} />}
++      </button>
++      <button onClick={enviarWhatsapp} title="Enviar por WhatsApp" className="p-1 rounded text-ink-500 hover:text-emerald-600 hover:bg-emerald-50 focus-ring">
++        <MessageCircle size={13} />
++      </button>
++      {feedback && <span className="text-[10px] text-ink-500 whitespace-nowrap">{feedback}</span>}
++    </div>
++  );
++}
++
+ function useTotalAberto(clinicaId, colName) {
+   const { data } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/${colName}` : null, "vencimento", "asc");
+   const raw = data.filter((r) => r.status !== "pago").reduce((acc, r) => acc + (Number(r.valor) || 0), 0);
+@@ -96,6 +234,12 @@ function useTotalAberto(clinicaId, colName) {
+ function formatarMoeda(v) {
+   return (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+ }
++function formatarDataBR(iso) {
++  if (!iso) return "—";
++  const [y, m, d] = iso.split("-");
++  if (!y || !m || !d) return iso;
++  return `${d}/${m}/${y}`;
++}
+ 
+ function Stat({ icon: Icon, label, value, tone }) {
+   return (
+@@ -120,17 +264,69 @@ function Th({ children }) { return <th className="px-4 py-2.5 font-semibold text
+ function Td({ children, className = "" }) { return <td className={`px-4 py-2.5 text-ink-700 ${className}`}>{children}</td>; }
+ 
+ function NovaContaModal({ clinicaId, colName, tab, onClose }) {
+-  const [form, setForm] = useState({ descricao: "", vencimento: "", valor: "", convenioId: "" });
++  const ehReceber = tab === "receber";
++  const { data: convenios } = useFirestoreCollection(ehReceber && clinicaId ? `clinicas/${clinicaId}/convenios` : null, "nome", "asc");
++  const { data: pacientes } = useFirestoreCollection(ehReceber && clinicaId ? `clinicas/${clinicaId}/pacientes` : null, "nome", "asc");
++
++  const [form, setForm] = useState({
++    descricao: "", vencimento: "", valor: "",
++    convenioId: "", convenioNome: "", reembolsoConvenio: false,
++    dataProcedimento: "", horaProcedimento: "",
++    pacienteId: "", pacienteNome: "", pacienteCelular: "", pacienteEmail: "", pacienteCpf: "",
++  });
++  const [buscaPaciente, setBuscaPaciente] = useState("");
++  const [comprovanteFile, setComprovanteFile] = useState(null);
+   const [salvando, setSalvando] = useState(false);
++  const [erro, setErro] = useState("");
++
++  const pacientesFiltrados = useMemo(() => {
++    const q = buscaPaciente.trim().toLowerCase();
++    if (q.length < 3) return [];
++    return pacientes.filter((p) => p.nome?.toLowerCase().includes(q)).slice(0, 8);
++  }, [buscaPaciente, pacientes]);
++
++  function selecionarPaciente(p) {
++    setForm((f) => ({ ...f, pacienteId: p.id, pacienteNome: p.nome, pacienteCelular: p.celular || p.telefone || "", pacienteEmail: p.email || "", pacienteCpf: p.cpf || "" }));
++    setBuscaPaciente("");
++  }
++  function limparPaciente() {
++    setForm((f) => ({ ...f, pacienteId: "", pacienteNome: "", pacienteCelular: "", pacienteEmail: "", pacienteCpf: "" }));
++  }
++  function selecionarConvenio(id) {
++    const c = convenios.find((c) => c.id === id);
++    // Ao escolher um convênio, já marca "reembolso" como padrão (é o caso
++    // típico); ao voltar pra Particular, desmarca. Continua editável — a
++    // clínica pode ter um convênio de pagamento direto sem reembolso.
++    setForm((f) => ({ ...f, convenioId: id, convenioNome: c?.nome || "", reembolsoConvenio: Boolean(id) }));
++  }
+ 
+   async function salvar() {
++    setErro("");
+     if (!form.descricao.trim() || !form.valor) return;
++    if (ehReceber && form.pacienteEmail && !emailValido(form.pacienteEmail)) { setErro("E-mail do paciente inválido."); return; }
+     setSalvando(true);
+     try {
+-      await criarDocumento(`clinicas/${clinicaId}/${colName}`, {
+-        descricao: form.descricao, vencimento: form.vencimento, valor: Number(form.valor), convenioId: form.convenioId || null, status: "pendente",
+-      });
++      const dados = ehReceber
++        ? {
++            descricao: form.descricao, vencimento: form.vencimento, valor: Number(form.valor), status: "pendente",
++            convenioId: form.convenioId || null, convenioNome: form.convenioNome || null, reembolsoConvenio: !!form.reembolsoConvenio,
++            dataProcedimento: form.dataProcedimento || null, horaProcedimento: form.horaProcedimento || null,
++            pacienteId: form.pacienteId || null, pacienteNome: form.pacienteNome || null,
++            pacienteCelular: form.pacienteCelular || null, pacienteEmail: form.pacienteEmail || null,
++            pacienteCpf: form.pacienteCpf || null,
++          }
++        : { descricao: form.descricao, vencimento: form.vencimento, valor: Number(form.valor), status: "pendente" };
++
++      const ref = await criarDocumento(`clinicas/${clinicaId}/${colName}`, dados);
++
++      if (ehReceber && !form.convenioId && comprovanteFile) {
++        const url = await enviarComprovantePagamento(clinicaId, ref.id, comprovanteFile);
++        await atualizarDocumento(`clinicas/${clinicaId}/${colName}`, ref.id, { comprovanteUrl: url });
++      }
+       onClose();
++    } catch (err) {
++      console.error("Erro ao criar conta:", err);
++      setErro(err.message || "Não foi possível salvar. Tente novamente.");
+     } finally {
+       setSalvando(false);
+     }
+@@ -139,19 +335,79 @@ function NovaContaModal({ clinicaId, colName, tab, onClose }) {
+   return (
+     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+       <div className="absolute inset-0 bg-ink-900/40" onClick={onClose} />
+-      <div className="relative bg-white w-full max-w-sm rounded-xl2 shadow-pop overflow-hidden animate-slideIn">
+-        <div className="px-5 py-4 bg-brand-600 text-white font-display font-semibold">
+-          Nova conta a {tab === "receber" ? "receber" : "pagar"}
++      <div className="relative bg-white w-full max-w-md max-h-[90vh] rounded-xl2 shadow-pop overflow-hidden animate-slideIn flex flex-col">
++        <div className="px-5 py-4 bg-brand-600 text-white font-display font-semibold shrink-0">
++          Nova conta a {ehReceber ? "receber" : "pagar"}
+         </div>
+-        <div className="p-5 space-y-3">
++        <div className="overflow-y-auto p-5 space-y-3">
++          {erro && <div className="flex items-start gap-2 text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-3"><AlertTriangle size={13} className="mt-0.5 shrink-0" /> {erro}</div>}
++
+           <Field label="Descrição" value={form.descricao} onChange={(v) => setForm({ ...form, descricao: v })} />
+           <div className="grid grid-cols-2 gap-3">
+             <Field label="Vencimento" type="date" value={form.vencimento} onChange={(v) => setForm({ ...form, vencimento: v })} />
+             <Field label="Valor (R$)" type="number" value={form.valor} onChange={(v) => setForm({ ...form, valor: v })} />
+           </div>
+-          {tab === "receber" && <Field label="Convênio (opcional)" value={form.convenioId} onChange={(v) => setForm({ ...form, convenioId: v })} />}
++
++          {ehReceber && (
++            <>
++              <div className="pt-1 border-t border-black/5" />
++
++              {form.pacienteId ? (
++                <div className="flex items-center gap-2 bg-brand-50/60 border border-brand-100 rounded-lg p-2.5">
++                  <span className="flex-1 text-xs font-semibold text-ink-900">{form.pacienteNome}</span>
++                  <button onClick={limparPaciente} className="p-1 rounded text-ink-500 hover:text-rose-600 focus-ring"><X size={13} /></button>
++                </div>
++              ) : (
++                <div className="relative">
++                  <label className="block text-xs">
++                    <span className="text-ink-500 font-medium">Paciente (opcional)</span>
++                    <input
++                      value={buscaPaciente}
++                      onChange={(e) => setBuscaPaciente(e.target.value)}
++                      placeholder="Buscar por nome, mínimo 3 letras…"
++                      className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring"
++                    />
++                  </label>
++                  {pacientesFiltrados.length > 0 && (
++                    <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-black/10 rounded-lg shadow-pop max-h-40 overflow-y-auto">
++                      {pacientesFiltrados.map((p) => (
++                        <button key={p.id} onClick={() => selecionarPaciente(p)} className="w-full text-left text-xs px-3 py-2 hover:bg-brand-50">
++                          {p.nome}
++                        </button>
++                      ))}
++                    </div>
++                  )}
++                </div>
++              )}
++
++              <div className="grid grid-cols-2 gap-3">
++                <SelectField label="Convênio" value={form.convenioId} onChange={selecionarConvenio} options={convenios.map((c) => c.id)} labels={Object.fromEntries(convenios.map((c) => [c.id, c.nome]))} placeholder="Particular" />
++                <label className="flex items-center gap-2 text-xs mt-5">
++                  <input type="checkbox" checked={form.reembolsoConvenio} onChange={(e) => setForm({ ...form, reembolsoConvenio: e.target.checked })} disabled={!form.convenioId} className="rounded accent-brand-600 disabled:opacity-40" />
++                  <span className={form.convenioId ? "text-ink-700" : "text-ink-500"}>Reembolso pelo convênio</span>
++                </label>
++              </div>
++
++              <div className="grid grid-cols-2 gap-3">
++                <Field label="Data do procedimento" type="date" value={form.dataProcedimento} onChange={(v) => setForm({ ...form, dataProcedimento: v })} />
++                <Field label="Horário" type="time" value={form.horaProcedimento} onChange={(v) => setForm({ ...form, horaProcedimento: v })} />
++              </div>
++
++              {!form.convenioId && (
++                <label className="block text-xs">
++                  <span className="text-ink-500 font-medium">Comprovante de pagamento (Particular)</span>
++                  <input
++                    type="file"
++                    accept="image/*,.pdf"
++                    onChange={(e) => setComprovanteFile(e.target.files?.[0] || null)}
++                    className="mt-1 w-full text-xs text-ink-700 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-brand-50 file:text-brand-700 hover:file:bg-brand-100"
++                  />
++                </label>
++              )}
++            </>
++          )}
+         </div>
+-        <div className="px-5 py-4 border-t border-black/5 flex justify-end gap-2">
++        <div className="px-5 py-4 border-t border-black/5 flex justify-end gap-2 shrink-0">
+           <button onClick={onClose} className="text-sm font-semibold text-ink-500 hover:text-ink-900 px-4 py-2 rounded-lg focus-ring">Cancelar</button>
+           <button onClick={salvar} disabled={salvando} className="flex items-center gap-1.5 text-sm font-semibold bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white px-5 py-2 rounded-lg focus-ring">
+             {salvando && <Loader2 size={14} className="animate-spin" />} Salvar
+@@ -165,7 +421,20 @@ function Field({ label, ...props }) {
+   return (
+     <label className="block text-xs">
+       <span className="text-ink-500 font-medium">{label}</span>
+-      <input {...props} onChange={(e) => props.onChange(e.target.value)} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
++      <input {...props} value={props.value ?? ""} onChange={(e) => props.onChange(e.target.value)} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
++    </label>
++  );
++}
++function SelectField({ label, value, onChange, options, labels, placeholder }) {
++  return (
++    <label className="block text-xs">
++      <span className="text-ink-500 font-medium">{label}</span>
++      <select value={value} onChange={(e) => onChange(e.target.value)} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring">
++        <option value="">{placeholder || "Selecione"}</option>
++        {options.map((opt) => (
++          <option key={opt} value={opt}>{labels ? labels[opt] : opt}</option>
++        ))}
++      </select>
+     </label>
+   );
+ }
+diff --git a/src/pages/NotasFiscais.jsx b/src/pages/NotasFiscais.jsx
+index f49a8d9..e505e70 100644
+--- a/src/pages/NotasFiscais.jsx
++++ b/src/pages/NotasFiscais.jsx
+@@ -33,13 +33,18 @@ export default function NotasFiscais() {
+   // configurado em Configurações → Dados Fiscais.
+   const codigoServicoEfetivo = form.codigoServico || clinica?.codigoServicoPadrao || "04030";
+ 
+-  const contasDisponiveis = contasReceber.filter((c) => c.status === "pendente" && !c.notaFiscalId);
++  // Antes só listava contas "pendente" — mas no fluxo recomendado a
++  // secretária marca como paga (recebe na hora) antes de liberar pro
++  // fiscal emitir a NFS-e, então uma conta "pago" sem nota vinculada
++  // também precisa aparecer aqui (senão ela some da lista assim que é
++  // paga, exatamente quando deveria ficar disponível pra emissão).
++  const contasDisponiveis = contasReceber.filter((c) => !c.notaFiscalId && (c.status === "pendente" || c.status === "pago"));
+ 
+   function vincularConta(id) {
+     setContaVinculadaId(id);
+     const conta = contasReceber.find((c) => c.id === id);
+     if (conta) {
+-      setForm((f) => ({ ...f, tomador: conta.pacienteNome || f.tomador, valor: String(conta.valor ?? f.valor), discriminacao: conta.descricao || f.discriminacao }));
++      setForm((f) => ({ ...f, tomador: conta.pacienteNome || f.tomador, cpfCnpj: conta.pacienteCpf || f.cpfCnpj, valor: String(conta.valor ?? f.valor), discriminacao: conta.descricao || f.discriminacao }));
+     }
+   }
+ 
+@@ -143,7 +148,7 @@ export default function NotasFiscais() {
+                 <select value={contaVinculadaId} onChange={(e) => vincularConta(e.target.value)} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring">
+                   <option value="">Nota avulsa (cria uma conta nova)</option>
+                   {contasDisponiveis.map((c) => (
+-                    <option key={c.id} value={c.id}>{c.descricao} — {(c.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</option>
++                    <option key={c.id} value={c.id}>{c.status === "pago" ? "✓ " : ""}{c.descricao} — {(c.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}{c.status === "pago" ? " (pago)" : " (pendente)"}</option>
+                   ))}
+                 </select>
+                 <span className="text-[11px] text-ink-500">Selecionar aqui evita lançar a mesma receita duas vezes no financeiro.</span>

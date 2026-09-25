@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Handshake, Stethoscope, Plus, Trash2, Loader2, Power, AlertTriangle } from "lucide-react";
+import { X, Handshake, Stethoscope, GraduationCap, Plus, Trash2, Loader2, Power, AlertTriangle } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
 import { useFirestoreCollection, criarDocumento, atualizarDocumento, excluirDocumento } from "../lib/firestore";
 
@@ -14,17 +14,20 @@ export default function ConveniosServicosModal({ open, onClose }) {
       <div className="absolute inset-0 bg-ink-900/40" onClick={onClose} />
       <div className="relative bg-white w-full max-w-lg max-h-[90vh] rounded-xl2 shadow-pop overflow-hidden animate-slideIn flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 bg-brand-600 text-white shrink-0">
-          <span className="font-display font-semibold flex items-center gap-2"><Handshake size={18} /> Convênios e Serviços</span>
+          <span className="font-display font-semibold flex items-center gap-2"><Handshake size={18} /> Convênios, Serviços e Especialidades</span>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/15 focus-ring"><X size={18} /></button>
         </div>
 
         <div className="flex border-b border-black/5 shrink-0">
           <TabBtn active={aba === "convenios"} onClick={() => setAba("convenios")} icon={Handshake}>Convênios</TabBtn>
           <TabBtn active={aba === "servicos"} onClick={() => setAba("servicos")} icon={Stethoscope}>Serviços</TabBtn>
+          <TabBtn active={aba === "especialidades"} onClick={() => setAba("especialidades")} icon={GraduationCap}>Especialidades</TabBtn>
         </div>
 
         <div className="overflow-y-auto p-5">
-          {aba === "convenios" ? <ListaConvenios clinicaId={clinicaId} /> : <ListaServicos clinicaId={clinicaId} />}
+          {aba === "convenios" && <ListaConvenios clinicaId={clinicaId} />}
+          {aba === "servicos" && <ListaServicos clinicaId={clinicaId} />}
+          {aba === "especialidades" && <ListaEspecialidades clinicaId={clinicaId} />}
         </div>
       </div>
     </div>
@@ -142,6 +145,64 @@ function ListaServicos({ clinicaId }) {
               <Power size={13} />
             </button>
             <button onClick={() => remover(s.id)} className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 focus-ring"><Trash2 size={13} /></button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ListaEspecialidades({ clinicaId }) {
+  const { data: especialidades, loading } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/especialidades` : null, "nome", "asc");
+  const [nome, setNome] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
+
+  async function adicionar(e) {
+    e.preventDefault();
+    setErro("");
+    if (!nome.trim()) return;
+    setSalvando(true);
+    try {
+      await criarDocumento(`clinicas/${clinicaId}/especialidades`, { nome: nome.trim(), ativo: true });
+      setNome("");
+    } catch (err) {
+      console.error("Erro ao criar especialidade:", err);
+      setErro(err.message || "Não foi possível salvar.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  async function alternarAtivo(e2) {
+    await atualizarDocumento(`clinicas/${clinicaId}/especialidades`, e2.id, { ativo: !e2.ativo });
+  }
+  async function remover(id) {
+    await excluirDocumento(`clinicas/${clinicaId}/especialidades`, id);
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-ink-500">Especialidades que aparecem pra escolher no agendamento — a clínica já vem com uma lista inicial das mais comuns, pra secretária não precisar digitar (e errar grafia). Desative as que não usa ou adicione outras aqui.</p>
+
+      <form onSubmit={adicionar} className="flex gap-2">
+        <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome da especialidade" className="flex-1 text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring" />
+        <button type="submit" disabled={salvando} className="flex items-center gap-1.5 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-xs font-semibold px-3.5 py-2 rounded-lg focus-ring shrink-0">
+          {salvando ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Adicionar
+        </button>
+      </form>
+      {erro && <div className="flex items-start gap-2 text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-3"><AlertTriangle size={13} className="mt-0.5 shrink-0" /> {erro}</div>}
+
+      <div className="space-y-1.5">
+        {loading && <div className="text-xs text-ink-500 flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Carregando…</div>}
+        {!loading && especialidades.length === 0 && <p className="text-xs text-ink-500 text-center py-4">Nenhuma especialidade cadastrada ainda — abra o agendamento uma vez pra clínica ser preenchida com a lista padrão automaticamente.</p>}
+        {especialidades.map((e2) => (
+          <div key={e2.id} className={`flex items-center gap-2 border border-black/5 rounded-lg p-2.5 ${e2.ativo === false ? "opacity-50" : ""}`}>
+            <span className="flex-1 text-sm text-ink-900">{e2.nome}</span>
+            <button onClick={() => alternarAtivo(e2)} title={e2.ativo === false ? "Reativar" : "Desativar"} className={`p-1.5 rounded-lg focus-ring ${e2.ativo === false ? "text-ink-500 hover:bg-gray-100" : "text-emerald-600 hover:bg-emerald-50"}`}>
+              <Power size={13} />
+            </button>
+            <button onClick={() => remover(e2.id)} className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 focus-ring"><Trash2 size={13} /></button>
           </div>
         ))}
       </div>

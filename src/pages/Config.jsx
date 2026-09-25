@@ -14,7 +14,7 @@ import { SlidersHorizontal, FileSignature, ListTodo, UserCog, FileText, Users, H
 const cards = [
   { icon: SlidersHorizontal, title: "Preferências", desc: "Ajuste suas configurações de trabalho e o layout do prontuário." },
   { icon: Users, title: "Equipe", desc: "Convide médicos, secretárias e financeiro pra esta clínica." },
-  { icon: Handshake, title: "Convênios e Serviços", desc: "Cadastre os convênios aceitos e os tipos de serviço com seus valores." },
+  { icon: Handshake, title: "Convênios e Serviços", desc: "Cadastre os convênios aceitos, os tipos de serviço com seus valores e as especialidades do agendamento." },
   { icon: FileEdit, title: "Formulários de Avaliação", desc: "Monte os formulários que sua equipe aplica nos pacientes, com score." },
   { icon: FileSignature, title: "Certificado Digital", desc: "Configure aqui seu certificado digital para assinaturas e NFS-e." },
   { icon: Landmark, title: "Dados Fiscais", desc: "CNPJ, Inscrição Municipal e códigos usados na emissão de NFS-e." },

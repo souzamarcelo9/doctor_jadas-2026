@@ -1532,6 +1532,67 @@ exports.enviarAvaliacaoPaciente = onCall({ region: REGION, timeoutSeconds: 30, s
 });
 
 // ---------------------------------------------------------------------
+// E-mail de comprovante/recibo do Financeiro (contas a receber)
+// ---------------------------------------------------------------------
+//
+// Mesma infra de e-mail (Resend) da função acima — reaproveitada pra
+// mandar o comprovante de pagamento anexado a um lançamento do Financeiro
+// pro paciente vinculado (útil sobretudo pra quem tem convênio com
+// reembolso: o paciente usa esse e-mail/anexo pra pedir reembolso junto
+// à operadora). Precisa da mesma RESEND_API_KEY já usada acima.
+//
+// Entrada:  { clinicaId, contaId }
+// Saída:    { ok: true }
+exports.enviarComprovanteFinanceiro = onCall({ region: REGION, timeoutSeconds: 30, secrets: [resendApiKey] }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId, contaId } = request.data || {};
+  if (!clinicaId || !contaId) throw new HttpsError("invalid-argument", "Dados incompletos.");
+
+  const membroSnap = await db.doc(`clinicas/${clinicaId}/membros/${request.auth.uid}`).get();
+  if (!membroSnap.exists || membroSnap.data().ativo !== true) {
+    throw new HttpsError("permission-denied", "Você precisa ser membro desta clínica.");
+  }
+  if (!resendApiKey.value()) {
+    throw new HttpsError("failed-precondition", "Envio de e-mail ainda não configurado neste ambiente (RESEND_API_KEY ausente). Avise o administrador do sistema.");
+  }
+
+  const contaRef = db.doc(`clinicas/${clinicaId}/contasReceber/${contaId}`);
+  const contaSnap = await contaRef.get();
+  if (!contaSnap.exists) throw new HttpsError("not-found", "Lançamento não encontrado.");
+  const conta = contaSnap.data();
+  if (!conta.pacienteEmail) {
+    throw new HttpsError("failed-precondition", "Esse lançamento não tem e-mail de paciente cadastrado.");
+  }
+  if (!conta.comprovanteUrl) {
+    throw new HttpsError("failed-precondition", "Anexe o comprovante de pagamento antes de enviar.");
+  }
+
+  const clinicaSnap = await db.doc(`clinicas/${clinicaId}`).get();
+  const clinicaNome = clinicaSnap.data()?.nome || "sua clínica";
+  const primeiroNome = (conta.pacienteNome || "").split(" ")[0] || "";
+
+  try {
+    await enviarEmailResend({
+      para: conta.pacienteEmail,
+      assunto: `Comprovante do seu atendimento na ${clinicaNome}`,
+      html: `
+        <p>Olá, ${primeiroNome}!</p>
+        <p>Segue o comprovante do seu atendimento na ${clinicaNome}${conta.reembolsoConvenio ? " — você pode usar esse documento pra solicitar reembolso junto ao seu convênio" : ""}.</p>
+        <p><a href="${conta.comprovanteUrl}" style="display:inline-block;background:#0d9488;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">Ver comprovante</a></p>
+        <p style="color:#888;font-size:12px">Se o botão não funcionar, copie e cole este link no navegador: ${conta.comprovanteUrl}</p>
+      `,
+    });
+  } catch (err) {
+    logger.error("Falha ao enviar comprovante financeiro via Resend:", err);
+    throw new HttpsError("internal", "Não foi possível enviar o e-mail. Verifique a configuração do Resend (domínio verificado, RESEND_API_KEY).");
+  }
+
+  await contaRef.update({ comprovanteEnviadoEm: new Date().toISOString(), comprovanteEnviadoPor: request.auth.uid });
+
+  return { ok: true };
+});
+
+// ---------------------------------------------------------------------
 // Correção pontual: recalcular usuarios/{uid}.clinicaIds + custom claims
 // de TODOS os usuários, direto da fonte de verdade (membros/{uid}.ativo)
 // ---------------------------------------------------------------------

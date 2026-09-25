@@ -2,7 +2,10 @@ import { useState } from "react";
 import { Search, ArrowUpDown, MoreVertical, Plus, Loader2 } from "lucide-react";
 import { problemChips } from "../../data/mockData";
 import { useTenant } from "../../context/TenantContext";
+import { useAuth } from "../../context/AuthContext";
 import { useFirestoreCollection, criarDocumento, alternarAtivo, atualizarDocumento } from "../../lib/firestore";
+import { registrarHistoricoClinico } from "../../lib/historicoClinico";
+import HistoricoClinicoLista from "./HistoricoClinicoLista";
 import Cid10Picker from "./Cid10Picker";
 
 const grauStyle = {
@@ -13,10 +16,18 @@ const grauStyle = {
 };
 
 export default function Problemas() {
-  const { pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
+  const { clinicaId, pacienteId, pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
+  const { user } = useAuth();
   const { data: rows, loading } = useFirestoreCollection(`${pacientePath}/problemas`);
   const [novo, setNovo] = useState({ cid: "", descricao: "", grau: "SEM CLASSIFICAÇÃO" });
   const [salvando, setSalvando] = useState(false);
+
+  function logHistorico(acao, resumo) {
+    registrarHistoricoClinico(clinicaId, pacienteId, {
+      tipo: "problemas", acao, resumo,
+      uid: user?.uid, nomeUsuario: user?.displayName || user?.email, atendimentoId,
+    });
+  }
 
   async function adicionar() {
     if (!novo.descricao.trim() || !firebaseConfigured) return;
@@ -29,6 +40,7 @@ export default function Problemas() {
         atendimentoId,
         profissionalId,
       });
+      logHistorico("registrou", `Adicionado: ${novo.cid ? `${novo.cid} — ` : ""}${novo.descricao} (${novo.grau})`);
       setNovo({ cid: "", descricao: "", grau: "SEM CLASSIFICAÇÃO" });
     } finally {
       setSalvando(false);
@@ -104,15 +116,33 @@ export default function Problemas() {
                 <Td>
                   <input
                     defaultValue={r.observacao}
-                    onBlur={(e) => e.target.value !== r.observacao && atualizarDocumento(`${pacientePath}/problemas`, r.id, { observacao: e.target.value })}
+                    onBlur={(e) => {
+                      if (e.target.value === r.observacao) return;
+                      atualizarDocumento(`${pacientePath}/problemas`, r.id, { observacao: e.target.value });
+                      logHistorico("editou", `Observação alterada em "${r.descricao}": ${e.target.value || "(em branco)"}`);
+                    }}
                     className="w-full text-xs border border-black/10 rounded px-2 py-1 focus-ring"
                   />
                 </Td>
                 <Td>
-                  <input type="checkbox" checked={r.ativo} onChange={() => alternarAtivo(`${pacientePath}/problemas`, r.id, !r.ativo)} className="rounded accent-brand-600" />
+                  <input
+                    type="checkbox"
+                    checked={r.ativo}
+                    onChange={() => {
+                      alternarAtivo(`${pacientePath}/problemas`, r.id, !r.ativo);
+                      logHistorico(r.ativo ? "inativou" : "registrou", `${r.ativo ? "Inativado" : "Reativado"}: ${r.descricao}`);
+                    }}
+                    className="rounded accent-brand-600"
+                  />
                 </Td>
                 <Td>
-                  <button onClick={() => alternarAtivo(`${pacientePath}/problemas`, r.id, false)} className="bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-semibold px-3 py-1 rounded-md focus-ring">
+                  <button
+                    onClick={() => {
+                      alternarAtivo(`${pacientePath}/problemas`, r.id, false);
+                      logHistorico("inativou", `Inativado: ${r.descricao}`);
+                    }}
+                    className="bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-semibold px-3 py-1 rounded-md focus-ring"
+                  >
                     Inativar
                   </button>
                 </Td>
@@ -121,6 +151,8 @@ export default function Problemas() {
           </tbody>
         </table>
       </div>
+
+      <HistoricoClinicoLista tipo="problemas" />
     </div>
   );
 }

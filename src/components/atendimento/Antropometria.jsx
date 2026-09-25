@@ -2,7 +2,10 @@ import { useState } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { TrendingUp, Loader2, Save } from "lucide-react";
 import { useTenant } from "../../context/TenantContext";
+import { useAuth } from "../../context/AuthContext";
 import { useFirestoreCollection, criarDocumento } from "../../lib/firestore";
+import { registrarHistoricoClinico } from "../../lib/historicoClinico";
+import HistoricoClinicoLista from "./HistoricoClinicoLista";
 
 const camposNumericos = [
   { key: "peso", label: "Peso", unit: "kg" },
@@ -14,7 +17,8 @@ const camposNumericos = [
 ];
 
 export default function Antropometria() {
-  const { pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
+  const { clinicaId, pacienteId, pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
+  const { user } = useAuth();
   const { data: historico, loading } = useFirestoreCollection(`${pacientePath}/antropometria`, "criadoEm", "asc");
   const [form, setForm] = useState({});
   const [salvando, setSalvando] = useState(false);
@@ -38,6 +42,17 @@ export default function Antropometria() {
         profissionalId,
         ativo: true,
       });
+      const resumo = camposNumericos
+        .filter((f) => form[f.key])
+        .map((f) => `${f.label} ${form[f.key]} ${f.unit}`)
+        .concat(imc ? [`IMC ${imc}`] : [])
+        .join(", ");
+      if (resumo) {
+        registrarHistoricoClinico(clinicaId, pacienteId, {
+          tipo: "medidas", acao: "registrou", resumo,
+          uid: user?.uid, nomeUsuario: user?.displayName || user?.email, atendimentoId,
+        });
+      }
       setForm({});
     } finally {
       setSalvando(false);
@@ -100,6 +115,8 @@ export default function Antropometria() {
           </ResponsiveContainer>
         )}
       </div>
+
+      <HistoricoClinicoLista tipo="medidas" className="lg:col-span-2" />
     </div>
   );
 }

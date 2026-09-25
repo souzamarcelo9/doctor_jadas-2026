@@ -2,7 +2,10 @@ import { useState } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 import { Activity, Loader2, Save } from "lucide-react";
 import { useTenant } from "../../context/TenantContext";
+import { useAuth } from "../../context/AuthContext";
 import { useFirestoreCollection, criarDocumento } from "../../lib/firestore";
+import { registrarHistoricoClinico } from "../../lib/historicoClinico";
+import HistoricoClinicoLista from "./HistoricoClinicoLista";
 
 // Sinais vitais "de verdade" — os parâmetros fisiológicos clássicos
 // aferidos numa consulta. Medidas antropométricas (peso, altura, IMC,
@@ -20,7 +23,8 @@ const camposNumericos = [
 ];
 
 export default function SinaisVitais() {
-  const { pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
+  const { clinicaId, pacienteId, pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
+  const { user } = useAuth();
   const { data: historico, loading } = useFirestoreCollection(`${pacientePath}/sinaisVitais`, "criadoEm", "asc");
   const [form, setForm] = useState({});
   const [salvando, setSalvando] = useState(false);
@@ -35,6 +39,16 @@ export default function SinaisVitais() {
         profissionalId,
         ativo: true,
       });
+      const resumo = camposNumericos
+        .filter((f) => form[f.key])
+        .map((f) => `${f.label} ${form[f.key]} ${f.unit}`)
+        .join(", ");
+      if (resumo) {
+        registrarHistoricoClinico(clinicaId, pacienteId, {
+          tipo: "sinaisVitais", acao: "registrou", resumo,
+          uid: user?.uid, nomeUsuario: user?.displayName || user?.email, atendimentoId,
+        });
+      }
       setForm({});
     } finally {
       setSalvando(false);
@@ -93,6 +107,8 @@ export default function SinaisVitais() {
           </ResponsiveContainer>
         )}
       </div>
+
+      <HistoricoClinicoLista tipo="sinaisVitais" className="lg:col-span-2" />
     </div>
   );
 }

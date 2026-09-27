@@ -530,7 +530,7 @@ function assinarRps(rps, privateKeyPem) {
   return sign.sign(privateKeyPem, "base64");
 }
 
-/** Assina digitalmente o <PedidoEnvioLoteRPS> inteiro (assinatura XMLDSig
+/** Assina digitalmente o pedido XML inteiro (assinatura XMLDSig
  * "enveloped", diferente da assinatura de cada RPS individual calculada
  * acima) — confirmado como obrigatório pela própria validação de schema da
  * Prefeitura ("expected 'RPS' as well as 'Signature'"). Usa xml-crypto
@@ -538,13 +538,17 @@ function assinarRps(rps, privateKeyPem) {
  * já que canonicalização/assinatura XML tem muita pegadinha sutil pra
  * arriscar reimplementar.
  *
+ * Reaproveitada também pelo cancelamento (nfseCancelar) — só muda o nome
+ * do elemento raiz (`elementoRaiz`), já que o pedido de cancelamento
+ * também precisa de uma assinatura do documento inteiro, mesmo padrão.
+ *
  * Algoritmos (RSA-SHA1 + C14N padrão) escolhidos por consistência com o
  * algoritmo já confirmado funcionando na assinatura de cada RPS — não há
  * confirmação direta na documentação pública de que são exatamente esses;
  * se a Prefeitura rejeitar especificamente a assinatura (mensagem de erro
  * vai mencionar isso explicitamente), o mais provável é precisar trocar
  * pra RSA-SHA256, que é o padrão mais atual de ICP-Brasil. */
-function assinarPedidoXmlDSig(xmlSemAssinatura, privateKeyPem, certPem) {
+function assinarPedidoXmlDSig(xmlSemAssinatura, privateKeyPem, certPem, elementoRaiz = "PedidoEnvioLoteRPS") {
   const sig = new SignedXml({
     privateKey: privateKeyPem,
     publicCert: certPem,
@@ -552,7 +556,7 @@ function assinarPedidoXmlDSig(xmlSemAssinatura, privateKeyPem, certPem) {
     canonicalizationAlgorithm: "http://www.w3.org/TR/2001/REC-xml-c14n-20010315",
   });
   sig.addReference({
-    xpath: "//*[local-name(.)='PedidoEnvioLoteRPS']",
+    xpath: `//*[local-name(.)='${elementoRaiz}']`,
     transforms: ["http://www.w3.org/2000/09/xmldsig#enveloped-signature", "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"],
     digestAlgorithm: "http://www.w3.org/2000/09/xmldsig#sha1",
     // URI="" (referencia o documento inteiro) SEM adicionar atributo Id na
@@ -830,6 +834,187 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
       : `Falha ao enviar: ${err.message}`;
     logger.warn("Envio à Prefeitura falhou:", err.message);
     await notaRef.update({ status: "erro_certificado", xmlEnviado: mensagemXml, erroWebservice: detalhe, tentadoEm: new Date().toISOString() });
+    return { status: "rejeitado_certificado", detalhe };
+  }
+});
+
+// ---------------------------------------------------------------------
+// Cancelamento de NF-e
+// ---------------------------------------------------------------------
+//
+// Reaproveita 100% da infraestrutura de envio já existente acima
+// (enviarSoapComCertificado, assinarPedidoXmlDSig, o mesmo certificado e
+// endpoint da emissão) — nada em nfseEmitir foi alterado. Só dois blocos
+// novos: a assinatura específica de cancelamento (mais simples que a do
+// RPS) e a montagem do PedidoCancelamentoNFe.
+//
+// Estrutura do XML e da assinatura confirmadas contra o manual oficial
+// (item 4.3.10) e contra um retorno real de erro de cancelamento
+// encontrado publicamente (repositório PyTrustNFe no GitHub) — esse
+// retorno real foi o que confirmou que o campo se chama "NumeroNFe" (o
+// exemplo enviado pelo usuário também usa esse nome), já que a tabela do
+// manual abrevia o nome do campo como só "Numero", de um jeito ambíguo.
+
+/** Monta a string de 20 posições (8 da Inscrição Municipal + 12 do Número
+ * da NF-e) e assina com RSA-SHA1 — "Observação 2: Assinatura Adicional"
+ * do item 4.3.10 do manual. Mais simples que assinarRps() porque o
+ * cancelamento só precisa identificar QUAL nota cancelar, não repetir os
+ * dados do serviço. */
+function assinarCancelamento(inscricaoMunicipalPrestador, numeroNfe, privateKeyPem) {
+  const pad = (v, n) => String(v).padStart(n, "0");
+  const cadeia = pad(inscricaoMunicipalPrestador, 8) + pad(numeroNfe, 12);
+  const sign = crypto.createSign("RSA-SHA1");
+  sign.update(cadeia, "ascii");
+  return sign.sign(privateKeyPem, "base64");
+}
+
+function montarXmlCancelamento({ cnpjRemetente, inscricaoMunicipalPrestador, numeroNfe, codigoVerificacao }, assinaturaCancelamento) {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<PedidoCancelamentoNFe xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.prefeitura.sp.gov.br/nfe">
+  <Cabecalho Versao="1" xmlns="">
+    <CPFCNPJRemetente><CNPJ>${cnpjRemetente}</CNPJ></CPFCNPJRemetente>
+    <transacao>true</transacao>
+  </Cabecalho>
+  <Detalhe xmlns="">
+    <ChaveNFe>
+      <InscricaoPrestador>${inscricaoMunicipalPrestador}</InscricaoPrestador>
+      <NumeroNFe>${numeroNfe}</NumeroNFe>
+      <CodigoVerificacao>${codigoVerificacao}</CodigoVerificacao>
+    </ChaveNFe>
+    <AssinaturaCancelamento>${assinaturaCancelamento}</AssinaturaCancelamento>
+  </Detalhe>
+</PedidoCancelamentoNFe>`;
+}
+
+/** Lê Inscrição do Prestador / Número da NF-e / Código de Verificação do
+ * <ChaveNFe> já presente na resposta de emissão salva (respostaWebservice)
+ * — nfseEmitir não foi alterado pra passar a guardar esses três campos
+ * separadamente; extraímos aqui, sob demanda, do XML cru que ele já
+ * salva. Em modo de teste (NFSE_MODO_TESTE=true, o padrão hoje) a
+ * Prefeitura não gera NF-e real nenhuma, então esses campos não existirão
+ * — por isso o cancelamento aceita informá-los manualmente também (ver
+ * dadosOverride), pra dar pra simular o fluxo em homologação. */
+function extrairChaveNFeDoRetorno(xml) {
+  if (!xml) return {};
+  const bloco = xml.match(/<ChaveNFe>([\s\S]*?)<\/ChaveNFe>/i)?.[1] || "";
+  const inscricaoPrestador = bloco.match(/<InscricaoPrestador>([\s\S]*?)<\/InscricaoPrestador>/i)?.[1]?.trim();
+  const numeroNfe = (bloco.match(/<NumeroNFe>([\s\S]*?)<\/NumeroNFe>/i) || bloco.match(/<Numero>([\s\S]*?)<\/Numero>/i))?.[1]?.trim();
+  const codigoVerificacao = bloco.match(/<CodigoVerificacao>([\s\S]*?)<\/CodigoVerificacao>/i)?.[1]?.trim();
+  return { inscricaoPrestador, numeroNfe, codigoVerificacao };
+}
+
+/**
+ * Cancela uma NF-e já autorizada. Só o dono da clínica (papel admin) pode
+ * chamar — mesmo critério já usado pra gerenciar o certificado digital,
+ * dado quão sensível/irreversível é essa ação.
+ *
+ * Entrada:  { clinicaId, notaFiscalId, dadosOverride?: { inscricaoMunicipalPrestador?, numeroNfe?, codigoVerificacao? } }
+ *           dadosOverride é opcional — só precisa ser preenchido quando a
+ *           nota não tiver Número/Código de Verificação reais salvos
+ *           (ex: foi emitida em modo de teste).
+ * Saída:    { status: "cancelada" | "rejeitada" | "rejeitado_certificado" | "erro", detalhe }
+ */
+exports.nfseCancelar = onCall({ region: REGION, timeoutSeconds: 60 }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId, notaFiscalId, dadosOverride } = request.data || {};
+  if (!clinicaId || !notaFiscalId) throw new HttpsError("invalid-argument", "Dados incompletos.");
+  await exigirAdmin(clinicaId, request.auth.uid);
+
+  const clinicaSnap = await db.doc(`clinicas/${clinicaId}`).get();
+  const clinicaDados = clinicaSnap.data() || {};
+  const certInfo = clinicaDados.certificadoNfse;
+  if (!certInfo || certInfo.status !== "configurado") {
+    throw new HttpsError("failed-precondition", "Nenhum certificado digital configurado para esta clínica. Configure em Configurações → Certificado Digital.");
+  }
+
+  const notaRef = db.doc(`clinicas/${clinicaId}/notasFiscais/${notaFiscalId}`);
+  const notaSnap = await notaRef.get();
+  if (!notaSnap.exists) throw new HttpsError("not-found", "Nota fiscal não encontrada.");
+  const nota = notaSnap.data();
+  if (nota.status === "cancelada") throw new HttpsError("failed-precondition", "Essa nota já foi cancelada.");
+
+  const chaveExtraida = extrairChaveNFeDoRetorno(nota.respostaWebservice);
+  const inscricaoMunicipalPrestador = (dadosOverride?.inscricaoMunicipalPrestador || chaveExtraida.inscricaoPrestador || clinicaDados.inscricaoMunicipal || "").replace(/\D/g, "");
+  const numeroNfe = (dadosOverride?.numeroNfe || chaveExtraida.numeroNfe || "").replace(/\D/g, "");
+  const codigoVerificacao = dadosOverride?.codigoVerificacao || chaveExtraida.codigoVerificacao;
+
+  if (!inscricaoMunicipalPrestador || !numeroNfe || !codigoVerificacao) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Não encontrei Número da NF-e e/ou Código de Verificação na resposta salva desta nota — comum quando ela foi emitida em modo de teste, que não gera NF-e real. Informe os três dados manualmente pra cancelar (Inscrição do Prestador, Número da NF-e e Código de Verificação)."
+    );
+  }
+
+  let secretJson;
+  try {
+    secretJson = JSON.parse(await lerSecretMaisRecente(nomeSecretCertificado(clinicaId)));
+  } catch (err) {
+    logger.error("Erro ao ler certificado do Secret Manager:", err);
+    throw new HttpsError("internal", "Não foi possível recuperar o certificado configurado.");
+  }
+  const { pfxBase64, senha } = secretJson;
+  const pfxBuffer = Buffer.from(pfxBase64, "base64");
+
+  let privateKeyPem, certPem;
+  try {
+    const asn1 = forge.asn1.fromDer(forge.util.decode64(pfxBase64));
+    const p12 = forge.pkcs12.pkcs12FromAsn1(asn1, false, senha);
+    const bagsKey = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
+    const keyBag = bagsKey[forge.pki.oids.pkcs8ShroudedKeyBag]?.[0];
+    privateKeyPem = forge.pki.privateKeyToPem(keyBag.key);
+    const bagsCert = p12.getBags({ bagType: forge.pki.oids.certBag });
+    const certBag = bagsCert[forge.pki.oids.certBag]?.[0];
+    certPem = forge.pki.certificateToPem(certBag.cert);
+  } catch (err) {
+    logger.error("Erro ao extrair chave privada do certificado:", err);
+    throw new HttpsError("internal", "Certificado configurado está corrompido ou a senha mudou — reimporte em Configurações.");
+  }
+
+  const assinaturaCancelamento = assinarCancelamento(inscricaoMunicipalPrestador, numeroNfe, privateKeyPem);
+  const mensagemXml = montarXmlCancelamento(
+    { cnpjRemetente: (clinicaDados.cnpj || "").replace(/\D/g, ""), inscricaoMunicipalPrestador, numeroNfe, codigoVerificacao },
+    assinaturaCancelamento
+  );
+
+  let mensagemXmlAssinado;
+  try {
+    mensagemXmlAssinado = assinarPedidoXmlDSig(mensagemXml, privateKeyPem, certPem, "PedidoCancelamentoNFe");
+  } catch (err) {
+    logger.error("Erro ao assinar o pedido de cancelamento (XMLDSig):", err);
+    throw new HttpsError("internal", "Não foi possível assinar digitalmente o pedido de cancelamento — confira o certificado configurado.");
+  }
+
+  const soapAction = "http://www.prefeitura.sp.gov.br/nfe/CancelamentoNFe";
+  const soapEnvelope = `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+  <soap:Body>
+    <CancelamentoNFeRequest xmlns="http://www.prefeitura.sp.gov.br/nfe">
+      <VersaoSchema>1</VersaoSchema>
+      <MensagemXML><![CDATA[${mensagemXmlAssinado}]]></MensagemXML>
+    </CancelamentoNFeRequest>
+  </soap:Body>
+</soap:Envelope>`;
+
+  try {
+    const respostaXml = await enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha);
+    logger.info("Prefeitura respondeu ao cancelamento:", respostaXml.slice(0, 2000));
+    const sucessoMatch = respostaXml.match(/<Sucesso>(true|false)<\/Sucesso>/i);
+    const cancelada = sucessoMatch?.[1]?.toLowerCase() === "true";
+    await notaRef.update({
+      status: cancelada ? "cancelada" : nota.status,
+      xmlCancelamentoEnviado: mensagemXml,
+      respostaCancelamento: respostaXml,
+      canceladoEm: cancelada ? new Date().toISOString() : null,
+      canceladoPor: cancelada ? request.auth.uid : null,
+    });
+    return { status: cancelada ? "cancelada" : "rejeitada", detalhe: respostaXml };
+  } catch (err) {
+    const provavelmenteTls = /certificate|SSL|TLS|handshake/i.test(err.message || "");
+    const detalhe = provavelmenteTls
+      ? "Conexão rejeitada na validação do certificado — mesmo comportamento esperado da emissão com certificado autoassinado. Funcionará normalmente com o certificado ICP-Brasil real."
+      : `Falha ao enviar: ${err.message}`;
+    logger.warn("Envio de cancelamento à Prefeitura falhou:", err.message);
+    await notaRef.update({ xmlCancelamentoEnviado: mensagemXml, erroCancelamento: detalhe, canceladoTentadoEm: new Date().toISOString() });
     return { status: "rejeitado_certificado", detalhe };
   }
 });

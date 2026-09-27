@@ -39,3 +39,14 @@ export async function nfseRecalcularStatus(clinicaId) {
   const { data } = await chamar({ clinicaId });
   return data; // { ok, atualizadas, total }
 }
+
+/** Cancela uma NF-e já autorizada — monta, assina e envia o
+ * PedidoCancelamentoNFe (reaproveita 100% da infra de envio da emissão).
+ * `dadosOverride` só é necessário quando a nota não tem Número da
+ * NF-e/Código de Verificação reais salvos (ex: emitida em modo teste). */
+export async function nfseCancelar(clinicaId, notaFiscalId, dadosOverride) {
+  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
+  const chamar = httpsCallable(functionsInstance, "nfseCancelar");
+  const { data } = await chamar({ clinicaId, notaFiscalId, dadosOverride: dadosOverride || null });
+  return data; // { status, detalhe }
+}

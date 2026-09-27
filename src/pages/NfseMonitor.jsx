@@ -1,9 +1,10 @@
 import { useState } from "react";
 import Topbar from "../components/Topbar";
-import { Receipt, CheckCircle2, Clock3, XCircle, Copy, Check, AlertTriangle, RefreshCcw, Loader2 } from "lucide-react";
+import { Receipt, CheckCircle2, Clock3, XCircle, Copy, Check, AlertTriangle, RefreshCcw, Loader2, Ban, ShieldAlert } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
 import { useFirestoreCollection, useFirestoreDoc } from "../lib/firestore";
-import { nfseEmitir, nfseRecalcularStatus } from "../lib/nfse";
+import { nfseEmitir, nfseRecalcularStatus, nfseCancelar } from "../lib/nfse";
+import { extrairErrosAmigaveis, extrairChaveNFe } from "../lib/nfseErros";
 
 const statusTone = {
   autorizada: { label: "Autorizada", tone: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
@@ -11,6 +12,7 @@ const statusTone = {
   processando: { label: "Processando (teste)", tone: "bg-amber-100 text-amber-700", icon: Clock3 },
   erro_certificado: { label: "Erro no envio", tone: "bg-rose-100 text-rose-700", icon: XCircle },
   pendente: { label: "Pendente", tone: "bg-gray-100 text-gray-500", icon: Clock3 },
+  cancelada: { label: "Cancelada", tone: "bg-gray-200 text-gray-600", icon: Ban },
 };
 
 export default function NfseMonitor() {
@@ -96,6 +98,7 @@ function DetalheNota({ nota, clinicaId, clinica }) {
   const st = statusTone[nota.status] || statusTone.pendente;
   const [reenviando, setReenviando] = useState(false);
   const [erroReenvio, setErroReenvio] = useState("");
+  const [mostrarCancelar, setMostrarCancelar] = useState(false);
 
   async function reenviar() {
     setErroReenvio("");
@@ -126,6 +129,9 @@ function DetalheNota({ nota, clinicaId, clinica }) {
     }
   }
 
+  const errosEmissao = extrairErrosAmigaveis(nota.respostaWebservice);
+  const errosCancelamento = extrairErrosAmigaveis(nota.respostaCancelamento);
+
   return (
     <div className="space-y-4">
       <div className="card p-4">
@@ -139,9 +145,14 @@ function DetalheNota({ nota, clinicaId, clinica }) {
           </div>
           <div className="flex items-center gap-2">
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${st.tone}`}>{st.label}</span>
-            {nota.status !== "autorizada" && (
+            {nota.status !== "autorizada" && nota.status !== "cancelada" && (
               <button onClick={reenviar} disabled={reenviando} className="flex items-center gap-1.5 text-xs font-semibold bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white px-3 py-1.5 rounded-lg focus-ring">
                 {reenviando ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />} Reenviar esta nota
+              </button>
+            )}
+            {nota.status === "autorizada" && (
+              <button onClick={() => setMostrarCancelar((v) => !v)} className="flex items-center gap-1.5 text-xs font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 px-3 py-1.5 rounded-lg focus-ring">
+                <Ban size={13} /> Cancelar NFS-e
               </button>
             )}
           </div>
@@ -149,7 +160,30 @@ function DetalheNota({ nota, clinicaId, clinica }) {
         {erroReenvio && <p className="text-xs text-rose-600 mt-2">{erroReenvio}</p>}
       </div>
 
-      {nota.resumoResposta && (
+      {mostrarCancelar && nota.status === "autorizada" && (
+        <PainelCancelamento clinicaId={clinicaId} nota={nota} onFechar={() => setMostrarCancelar(false)} />
+      )}
+
+      {nota.canceladoEm && (
+        <div className="card p-4 bg-gray-50 border-gray-100 flex items-start gap-2">
+          <Ban size={15} className="text-gray-500 mt-0.5 shrink-0" />
+          <div className="text-xs text-ink-700">
+            <span className="font-semibold text-ink-900">Cancelada</span> em {new Date(nota.canceladoEm).toLocaleString("pt-BR")}.
+          </div>
+        </div>
+      )}
+
+      {errosCancelamento.length > 0 && <ListaErrosAmigaveis titulo="Retorno do cancelamento" itens={errosCancelamento} />}
+      {nota.erroCancelamento && (
+        <div className="card p-4 bg-rose-50 border-rose-100">
+          <div className="text-xs font-semibold text-rose-700">Falha ao enviar o cancelamento</div>
+          <p className="text-xs text-rose-700 mt-0.5">{nota.erroCancelamento}</p>
+        </div>
+      )}
+
+      {errosEmissao.length > 0 ? (
+        <ListaErrosAmigaveis titulo="Retorno da emissão" itens={errosEmissao} />
+      ) : nota.resumoResposta ? (
         <div className={`card p-4 flex items-start gap-2 ${nota.status === "erro_certificado" ? "bg-rose-50 border-rose-100" : "bg-amber-50 border-amber-100"}`}>
           <AlertTriangle size={15} className={nota.status === "erro_certificado" ? "text-rose-600 mt-0.5 shrink-0" : "text-amber-600 mt-0.5 shrink-0"} />
           <div>
@@ -157,7 +191,7 @@ function DetalheNota({ nota, clinicaId, clinica }) {
             <p className="text-xs text-ink-700 mt-0.5">{nota.resumoResposta}</p>
           </div>
         </div>
-      )}
+      ) : null}
 
       {nota.erroWebservice && (
         <div className="card p-4 bg-rose-50 border-rose-100">
@@ -167,11 +201,127 @@ function DetalheNota({ nota, clinicaId, clinica }) {
       )}
 
       {nota.xmlEnviado && <BlocoXml titulo="XML enviado (RPS)" conteudo={nota.xmlEnviado} />}
-      {nota.respostaWebservice && <BlocoXml titulo="XML de retorno da Prefeitura" conteudo={nota.respostaWebservice} />}
+      {nota.respostaWebservice && <BlocoXml titulo="XML de retorno da Prefeitura (emissão)" conteudo={nota.respostaWebservice} />}
+      {nota.xmlCancelamentoEnviado && <BlocoXml titulo="XML enviado (cancelamento)" conteudo={nota.xmlCancelamentoEnviado} />}
+      {nota.respostaCancelamento && <BlocoXml titulo="XML de retorno da Prefeitura (cancelamento)" conteudo={nota.respostaCancelamento} />}
 
       {!nota.xmlEnviado && !nota.respostaWebservice && !nota.erroWebservice && (
         <div className="card p-4 text-xs text-ink-500">Essa tentativa ainda não tem XML registrado (pode ser de antes dessa funcionalidade existir, ou ainda está pendente de envio).</div>
       )}
+    </div>
+  );
+}
+
+/** Painel de confirmação do cancelamento — pré-preenche a chave da NF-e a
+ * partir da resposta de emissão já salva, mas deixa os três campos
+ * editáveis (necessário quando a nota foi emitida em modo de teste, que
+ * não gera Número/Código de Verificação reais — ver comentário em
+ * functions/index.js, nfseCancelar). */
+function PainelCancelamento({ clinicaId, nota, onFechar }) {
+  const chave = extrairChaveNFe(nota.respostaWebservice);
+  const [form, setForm] = useState({
+    inscricaoMunicipalPrestador: chave.inscricaoPrestador || "",
+    numeroNfe: chave.numeroNfe || "",
+    codigoVerificacao: chave.codigoVerificacao || "",
+  });
+  const [confirmando, setConfirmando] = useState(false);
+  const [cancelando, setCancelando] = useState(false);
+  const [erro, setErro] = useState("");
+
+  async function confirmar() {
+    setErro("");
+    if (!form.numeroNfe || !form.codigoVerificacao || !form.inscricaoMunicipalPrestador) {
+      setErro("Preencha Inscrição do Prestador, Número da NF-e e Código de Verificação.");
+      return;
+    }
+    setCancelando(true);
+    try {
+      const resultado = await nfseCancelar(clinicaId, nota.id, form);
+      if (resultado.status === "cancelada") {
+        onFechar();
+      } else {
+        setErro("A Prefeitura respondeu — confira o retorno do cancelamento logo abaixo pra ver o motivo.");
+      }
+    } catch (err) {
+      console.error("Erro ao cancelar NFS-e:", err);
+      setErro(err.message || "Não foi possível enviar o cancelamento.");
+    } finally {
+      setCancelando(false);
+    }
+  }
+
+  return (
+    <div className="card p-4 bg-rose-50/40 border-rose-100 space-y-3">
+      <div className="flex items-start gap-2">
+        <ShieldAlert size={16} className="text-rose-600 mt-0.5 shrink-0" />
+        <div className="text-xs text-ink-700">
+          <span className="font-semibold text-ink-900">Cancelar esta NFS-e é irreversível.</span> Confira os dados abaixo antes de confirmar — vieram pré-preenchidos a partir da resposta da emissão, mas dá pra editar se estiverem errados ou ausentes (comum em notas emitidas em modo de teste).
+        </div>
+      </div>
+
+      {!confirmando ? (
+        <div className="grid sm:grid-cols-3 gap-3">
+          <CampoCancelamento label="Inscrição do Prestador" value={form.inscricaoMunicipalPrestador} onChange={(v) => setForm({ ...form, inscricaoMunicipalPrestador: v })} />
+          <CampoCancelamento label="Número da NF-e" value={form.numeroNfe} onChange={(v) => setForm({ ...form, numeroNfe: v })} />
+          <CampoCancelamento label="Código de Verificação" value={form.codigoVerificacao} onChange={(v) => setForm({ ...form, codigoVerificacao: v })} />
+        </div>
+      ) : null}
+
+      {erro && <p className="text-xs text-rose-700">{erro}</p>}
+
+      <div className="flex items-center gap-2">
+        {!confirmando ? (
+          <>
+            <button onClick={() => setConfirmando(true)} className="text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white px-3.5 py-1.5 rounded-lg focus-ring">Continuar</button>
+            <button onClick={onFechar} className="text-xs font-semibold text-ink-500 hover:text-ink-900 px-3 py-1.5 rounded-lg focus-ring">Cancelar</button>
+          </>
+        ) : (
+          <>
+            <span className="text-xs text-ink-700">Confirma o cancelamento da NF-e nº <strong>{form.numeroNfe}</strong>?</span>
+            <button onClick={confirmar} disabled={cancelando} className="flex items-center gap-1.5 text-xs font-semibold bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white px-3.5 py-1.5 rounded-lg focus-ring ml-auto">
+              {cancelando ? <Loader2 size={13} className="animate-spin" /> : <Ban size={13} />} Sim, cancelar
+            </button>
+            <button onClick={() => setConfirmando(false)} disabled={cancelando} className="text-xs font-semibold text-ink-500 hover:text-ink-900 px-3 py-1.5 rounded-lg focus-ring">Voltar</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CampoCancelamento({ label, value, onChange }) {
+  return (
+    <label className="block text-xs">
+      <span className="text-ink-500 font-medium">{label}</span>
+      <input value={value} onChange={(e) => onChange(e.target.value)} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring bg-white" />
+    </label>
+  );
+}
+
+/** Lista de erros/alertas extraídos do XML de retorno, cada um com código,
+ * a descrição em português que a própria Prefeitura já manda, e — quando
+ * temos — uma dica em linguagem simples do que costuma causar aquele
+ * código (ver src/lib/nfseErros.js). O XML completo continua disponível
+ * mais abaixo (BlocoXml), pra quem quiser conferir tudo. */
+function ListaErrosAmigaveis({ titulo, itens }) {
+  if (itens.length === 0) return null;
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-black/5 text-xs font-semibold text-ink-700">{titulo}</div>
+      <ul className="divide-y divide-black/5">
+        {itens.map((item, i) => (
+          <li key={i} className={`p-3.5 flex items-start gap-2.5 ${item.tipo === "erro" ? "bg-rose-50/40" : "bg-amber-50/40"}`}>
+            {item.tipo === "erro" ? <XCircle size={15} className="text-rose-600 mt-0.5 shrink-0" /> : <AlertTriangle size={15} className="text-amber-600 mt-0.5 shrink-0" />}
+            <div className="text-xs">
+              <div className="text-ink-900">
+                {item.codigo && <span className="font-mono font-semibold mr-1.5">#{item.codigo}</span>}
+                {item.descricao || "Sem descrição no retorno."}
+              </div>
+              {item.dica && <p className="text-ink-500 mt-1">{item.dica}</p>}
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

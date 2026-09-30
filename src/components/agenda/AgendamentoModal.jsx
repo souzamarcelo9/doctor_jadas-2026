@@ -459,7 +459,7 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
                 value={agendaForm.especialidade}
                 onChange={(v) => (v === "__outra__" ? setEspecialidadeLivre(true) : setAgendaForm({ ...agendaForm, especialidade: v }))}
                 options={[...especialidadesAtivas.map((e) => e.nome), "__outra__"]}
-                labels={{ __outra__: "Outra (digitar)…" }}
+                labels={{ ...Object.fromEntries(especialidadesAtivas.map((e) => [e.nome, e.nome])), __outra__: "Outra (digitar)…" }}
                 placeholder={carregandoEspecialidades ? "Carregando…" : "Selecione"}
               />
             )}

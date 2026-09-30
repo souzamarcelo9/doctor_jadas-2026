@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import Topbar from "../components/Topbar";
 import { Receipt, PlugZap, Send, Clock3, CheckCircle2, AlertTriangle, Loader2, XCircle, Link2, Monitor, ChevronLeft, ChevronRight } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
@@ -113,9 +114,9 @@ export default function NotasFiscais() {
       <Topbar title="Notas Fiscais" />
       <main className="flex-1 p-4 lg:p-6 space-y-4">
         <div className="flex justify-end">
-          <a href="/notas-fiscais/monitor" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg focus-ring">
-            <Monitor size={13} /> Abrir monitor de emissões (nova aba)
-          </a>
+          <Link to="/notas-fiscais/monitor" className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg focus-ring">
+            <Monitor size={13} /> Abrir monitor de emissões
+          </Link>
         </div>
 
         <div className="card p-4 flex items-start gap-3 bg-brand-50/40 border-brand-100">

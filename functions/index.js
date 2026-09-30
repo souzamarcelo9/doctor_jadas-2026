@@ -228,9 +228,12 @@ function normalizarTipo(tipo) {
 // Memed — receita digital
 // ---------------------------------------------------------------------
 
-// Ambiente de testes da Memed, compartilhado por todos os parceiros (troque
-// para a URL de produção depois da validação técnica com eles).
-const MEMED_API_BASE = "https://integrations.api.memed.com.br";
+// URL de produção — confirmada na documentação oficial da Memed
+// (doc.memed.com.br/docs/backend/configuracoes, seção "URLs de produção",
+// MEMED_API_URL = https://api.memed.com.br/v1 — o /v1 já é acrescentado à
+// parte em cada chamada abaixo, por isso não entra aqui na base).
+// Antes disso, apontava pro ambiente de testes (https://integrations.api.memed.com.br).
+const MEMED_API_BASE = "https://api.memed.com.br";
 
 /**
  * Faz login (ou cadastro, se ainda não existir) do médico na Memed, usando
@@ -347,6 +350,35 @@ exports.memedObterToken = onCall({ region: REGION, secrets: [memedApiKey, memedS
   return { token };
 });
 
+/**
+ * Limpa o token da Memed cacheado em todos os médicos da clínica — usar
+ * UMA VEZ logo depois de trocar `MEMED_API_BASE` de teste pra produção
+ * (ou sempre que as chaves MEMED_API_KEY/MEMED_SECRET_KEY forem trocadas).
+ * Um token obtido no ambiente antigo não é válido no novo — sem isso, o
+ * próximo médico a tentar prescrever receberia um erro confuso da Memed
+ * em vez de simplesmente logar de novo (o que memedObterToken já faz
+ * sozinho quando não encontra token salvo).
+ *
+ * Entrada:  { clinicaId }
+ * Saída:    { ok: true, limpos: number }
+ */
+exports.memedLimparTokensCache = onCall({ region: REGION }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId } = request.data || {};
+  if (!clinicaId) throw new HttpsError("invalid-argument", "clinicaId é obrigatório.");
+  await exigirAdmin(clinicaId, request.auth.uid);
+
+  const snap = await db.collection(`clinicas/${clinicaId}/membros`).get();
+  let limpos = 0;
+  for (const doc of snap.docs) {
+    if (doc.data().memedToken) {
+      await doc.ref.update({ memedToken: FieldValue.delete(), memedTokenAtualizadoEm: FieldValue.delete() });
+      limpos += 1;
+    }
+  }
+  return { ok: true, limpos };
+});
+
 // ---------------------------------------------------------------------
 // NFS-e Paulistana — certificado digital + emissão
 // ---------------------------------------------------------------------
@@ -391,7 +423,7 @@ const NFSE_WSDL_PATH = "/lotenfe.asmx";
 // Por segurança, por padrão usamos o método de TESTE (não gera NF-e de
 // verdade mesmo que o certificado seja aceito) — só troque para false
 // depois de validar tudo com o certificado ICP-Brasil real do cliente.
-const NFSE_MODO_TESTE = true;
+const NFSE_MODO_TESTE = false;
 
 function nomeSecretCertificado(clinicaId) {
   return `nfse-cert-${clinicaId}`;

@@ -11,3 +11,12 @@ export async function memedObterToken(clinicaId, forcarNovoLogin = false) {
   const { data } = await chamar({ clinicaId, forcarNovoLogin });
   return data.token;
 }
+
+/** Limpa os tokens da Memed cacheados nos médicos da clínica — usar uma
+ * vez depois de trocar de ambiente (teste → produção) ou de chaves. */
+export async function memedLimparTokensCache(clinicaId) {
+  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
+  const chamar = httpsCallable(functionsInstance, "memedLimparTokensCache");
+  const { data } = await chamar({ clinicaId });
+  return data; // { ok, limpos }
+}

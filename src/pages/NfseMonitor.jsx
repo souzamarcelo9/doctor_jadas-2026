@@ -9,7 +9,7 @@ import { extrairErrosAmigaveis, extrairChaveNFe, normalizarRespostaNfse } from "
 const statusTone = {
   autorizada: { label: "Autorizada", tone: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
   rejeitada: { label: "Rejeitada", tone: "bg-rose-100 text-rose-700", icon: XCircle },
-  processando: { label: "Processando (teste)", tone: "bg-amber-100 text-amber-700", icon: Clock3 },
+  processando: { label: "Processando", tone: "bg-amber-100 text-amber-700", icon: Clock3 },
   erro_certificado: { label: "Erro no envio", tone: "bg-rose-100 text-rose-700", icon: XCircle },
   pendente: { label: "Pendente", tone: "bg-gray-100 text-gray-500", icon: Clock3 },
   cancelada: { label: "Cancelada", tone: "bg-gray-200 text-gray-600", icon: Ban },
@@ -255,7 +255,7 @@ function PainelCancelamento({ clinicaId, nota, onFechar }) {
       <div className="flex items-start gap-2">
         <ShieldAlert size={16} className="text-rose-600 mt-0.5 shrink-0" />
         <div className="text-xs text-ink-700">
-          <span className="font-semibold text-ink-900">Cancelar esta NFS-e é irreversível.</span> Confira os dados abaixo antes de confirmar — vieram pré-preenchidos a partir da resposta da emissão, mas dá pra editar se estiverem errados ou ausentes (comum em notas emitidas em modo de teste).
+          <span className="font-semibold text-ink-900">Cancelar esta NFS-e é irreversível.</span> Confira os dados abaixo antes de confirmar — vieram pré-preenchidos a partir da resposta da emissão, mas você pode editar se estiverem errados ou ausentes).
         </div>
       </div>
 

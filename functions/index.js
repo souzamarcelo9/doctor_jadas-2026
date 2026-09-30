@@ -812,7 +812,7 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
 
   try {
     const respostaXmlBruta = await enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha);
-    logger.info("Prefeitura respondeu (modo teste):", respostaXmlBruta.slice(0, 2000));
+    logger.info("Prefeitura respondeu:", respostaXmlBruta.slice(0, 2000));
     const respostaXml = normalizarRespostaNfse(respostaXmlBruta);
     const resumo = extrairResumoXml(respostaXml);
     // <Sucesso> é o indicador oficial e definitivo do próprio webservice —

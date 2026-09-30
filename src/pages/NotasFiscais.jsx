@@ -9,7 +9,7 @@ import { nfseEmitir } from "../lib/nfse";
 const statusTone = {
   autorizada: { label: "Autorizada", tone: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
   rejeitada: { label: "Rejeitada", tone: "bg-rose-100 text-rose-700", icon: XCircle },
-  processando: { label: "Processando (teste)", tone: "bg-amber-100 text-amber-700", icon: Clock3 },
+  processando: { label: "Processando", tone: "bg-amber-100 text-amber-700", icon: Clock3 },
   erro_certificado: { label: "Certificado rejeitado", tone: "bg-rose-100 text-rose-700", icon: XCircle },
   pendente: { label: "Pendente", tone: "bg-gray-100 text-gray-500", icon: Clock3 },
 };
@@ -128,9 +128,8 @@ export default function NotasFiscais() {
           <PlugZap size={18} className="text-brand-600 mt-0.5 shrink-0" />
           <div className="text-xs text-ink-700">
             <span className="font-semibold text-ink-900">Integração NFS-e Paulistana (Prefeitura de São Paulo).</span>{" "}
-            O RPS é montado, assinado e enviado de verdade em <strong>modo de teste</strong> (não gera NF-e real).
-            Com um certificado autoassinado, a Prefeitura rejeita a conexão — isso é esperado, confirma que o resto do
-            fluxo está funcionando. Assim que houver um certificado ICP-Brasil real, o resultado muda sozinho.
+            O RPS é montado, assinado e enviado no <strong>modo produtivo</strong> .
+            Sem um certificado válido, a Prefeitura rejeita a conexão . Assim que houver um certificado ICP-Brasil real configurado, o resultado muda sozinho.
           </div>
         </div>
 
@@ -145,7 +144,7 @@ export default function NotasFiscais() {
           <form onSubmit={emitir} className="lg:col-span-2 card p-4 space-y-3">
             <div className="flex items-center gap-2 mb-1">
               <Receipt size={16} className="text-brand-600" />
-              <span className="text-sm font-display font-semibold text-ink-900">Emitir NFS-e (teste)</span>
+              <span className="text-sm font-display font-semibold text-ink-900">Emitir NFS-e </span>
             </div>
 
             {contasDisponiveis.length > 0 && (
@@ -189,7 +188,7 @@ export default function NotasFiscais() {
             </label>
 
             <button disabled={issuing || !firebaseConfigured || !certConfigurado} className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring">
-              {issuing ? (<><Loader2 size={16} className="animate-spin" /> Enviando ao web service da Prefeitura…</>) : (<><Send size={15} /> Emitir Nota Fiscal (teste)</>)}
+              {issuing ? (<><Loader2 size={16} className="animate-spin" /> Enviando ao web service da Prefeitura…</>) : (<><Send size={15} /> Emitir Nota Fiscal</>)}
             </button>
 
             {resultado && (

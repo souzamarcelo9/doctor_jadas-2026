@@ -22,7 +22,7 @@ export default function NotasFiscais() {
   const [issuing, setIssuing] = useState(false);
   const [resultado, setResultado] = useState(null);
   const [contaVinculadaId, setContaVinculadaId] = useState("");
-  const [form, setForm] = useState({ tomador: "", cpfCnpj: "", codigoServico: "", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
+  const [form, setForm] = useState({ tomador: "", cpfCnpj: "", codigoServico: "", valor: "", aliquota: "", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
   const [pagina, setPagina] = useState(1);
   const ITENS_POR_PAGINA = 10;
   const totalPaginas = Math.max(1, Math.ceil(historico.length / ITENS_POR_PAGINA));
@@ -33,6 +33,11 @@ export default function NotasFiscais() {
   // na clínica — sem isso caía sempre no "04030" fixo, ignorando o que foi
   // configurado em Configurações → Dados Fiscais.
   const codigoServicoEfetivo = form.codigoServico || clinica?.codigoServicoPadrao || "04030";
+  // Mesma lógica: usa o que a pessoa editou nesta sessão, senão o padrão
+  // configurado pra clínica em Dados Fiscais, senão 0.02 (piso legal pra
+  // serviços de saúde no regime normal em SP — não é universal, ver aviso
+  // em Configurações → Dados Fiscais sobre Simples Nacional/SUP).
+  const aliquotaEfetiva = form.aliquota || clinica?.aliquotaIssPadrao || "0.02";
 
   // Antes só listava contas "pendente" — mas no fluxo recomendado a
   // secretária marca como paga (recebe na hora) antes de liberar pro
@@ -59,7 +64,7 @@ export default function NotasFiscais() {
     try {
       const notaRef = await criarDocumento(`clinicas/${clinicaId}/notasFiscais`, {
         tomador: form.tomador, cpfCnpj: form.cpfCnpj, codigoServico: codigoServicoEfetivo,
-        valor: Number(form.valor), aliquota: form.aliquota, discriminacao: form.discriminacao,
+        valor: Number(form.valor), aliquota: aliquotaEfetiva, discriminacao: form.discriminacao,
         tipoAtendimento: form.tipoAtendimento,
         status: "pendente",
       });
@@ -71,7 +76,7 @@ export default function NotasFiscais() {
         razaoSocialTomador: form.tomador,
         valorServicos: Number(form.valor),
         codigoServico: codigoServicoEfetivo,
-        aliquota: Number(form.aliquota),
+        aliquota: Number(aliquotaEfetiva),
         discriminacao: form.discriminacao,
         tipoAtendimento: form.tipoAtendimento,
         nbs: clinica?.nbsPadrao,
@@ -99,7 +104,7 @@ export default function NotasFiscais() {
         }
       }
 
-      setForm({ tomador: "", cpfCnpj: "", codigoServico: "", valor: "", aliquota: "0.02", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
+      setForm({ tomador: "", cpfCnpj: "", codigoServico: "", valor: "", aliquota: "", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
       setContaVinculadaId("");
     } catch (err) {
       console.error("Erro ao emitir NFS-e:", err);
@@ -164,7 +169,10 @@ export default function NotasFiscais() {
                 <p className="text-[10px] text-emerald-600 -mt-1.5 col-span-2">✓ 04030 — "Medicina e biomedicina" (PJ), item 4.01, confirmado no Anexo 1 da IN SF/SUREM 08/2011 (atualizado até IN 03/2026).</p>
               )}
               <Field label="Valor do serviço (R$)" type="number" value={form.valor} onChange={(v) => setForm({ ...form, valor: v })} />
-              <Field label="Alíquota ISS (ex: 0.02 = 2%)" value={form.aliquota} onChange={(v) => setForm({ ...form, aliquota: v })} />
+              <Field label="Alíquota ISS (ex: 0.02 = 2%)" value={aliquotaEfetiva} onChange={(v) => setForm({ ...form, aliquota: v })} />
+              {clinica?.simplesNacional && (
+                <p className="text-[10px] text-amber-600 -mt-1.5 col-span-2">⚠ Clínica no Simples Nacional — essa alíquota muda mês a mês conforme o faturamento (Anexo III). Confirme o valor atual com o contador antes de emitir; não é um percentual fixo.</p>
+              )}
               <label className="block text-xs">
                 <span className="text-ink-500 font-medium">Tipo de atendimento</span>
                 <select value={form.tipoAtendimento} onChange={(e) => setForm({ ...form, tipoAtendimento: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring">

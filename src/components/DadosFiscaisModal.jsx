@@ -26,6 +26,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
     cnpj: form.cnpj ?? clinica?.cnpj ?? "",
     inscricaoMunicipal: form.inscricaoMunicipal ?? clinica?.inscricaoMunicipal ?? "",
     codigoServicoPadrao: form.codigoServicoPadrao ?? clinica?.codigoServicoPadrao ?? "04030",
+    aliquotaIssPadrao: form.aliquotaIssPadrao ?? clinica?.aliquotaIssPadrao ?? "0.02",
     nbsPadrao: form.nbsPadrao ?? clinica?.nbsPadrao ?? "123012100",
     cClassTribPadrao: form.cClassTribPadrao ?? clinica?.cClassTribPadrao ?? "200029",
     simplesNacional: form.simplesNacional ?? clinica?.simplesNacional ?? false,
@@ -42,6 +43,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
         cnpj: apenasDigitos(valores.cnpj),
         inscricaoMunicipal: apenasDigitos(valores.inscricaoMunicipal),
         codigoServicoPadrao: valores.codigoServicoPadrao.trim(),
+        aliquotaIssPadrao: valores.aliquotaIssPadrao.trim(),
         nbsPadrao: valores.nbsPadrao.trim(),
         cClassTribPadrao: valores.cClassTribPadrao.trim(),
         simplesNacional: valores.simplesNacional,
@@ -94,6 +96,18 @@ export default function DadosFiscaisModal({ open, onClose }) {
                   <span className="font-semibold block">Clínica optante pelo Simples Nacional</span>
                   Empresas no Simples Nacional ainda usam o layout antigo (v1) da NFS-e — a Prefeitura rejeita o layout novo (Reforma Tributária/IBS-CBS) pra esse regime. Confirme isso com o contador da clínica se não tiver certeza.
                 </span>
+              </label>
+
+              <label className="block text-xs">
+                <span className="text-ink-500 font-medium">Alíquota ISS padrão (ex: 0.02 = 2%)</span>
+                <input value={valores.aliquotaIssPadrao} onChange={(e) => setForm({ ...form, aliquotaIssPadrao: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring" />
+                <span className="text-[11px] text-ink-500 block mt-1">
+                  Fica pré-preenchida em toda nota nova, mas continua editável nota a nota. 2% é o piso legal pra serviços de saúde no regime normal em São Paulo (Lei 3.691/03) — mas <strong>não</strong> vale pra todo mundo:
+                </span>
+                <ul className="text-[11px] text-ink-500 list-disc pl-4 mt-1 space-y-0.5">
+                  <li><strong>Simples Nacional:</strong> a alíquota efetiva de ISS varia mês a mês, conforme a faixa de faturamento dos últimos 12 meses (Anexo III da LC 123/2006) — não é um número fixo. Peça o valor atual pro contador da clínica a cada período e atualize aqui.</li>
+                  <li><strong>Sociedade Uniprofissional (SUP):</strong> o ISS costuma ser um valor fixo por profissional, não um percentual sobre o faturamento — esse campo pode não se aplicar da forma usual. Confirme o enquadramento com o contador.</li>
+                </ul>
               </label>
 
               <div className="border-t border-black/5 pt-4">

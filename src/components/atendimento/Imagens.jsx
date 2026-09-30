@@ -1,9 +1,12 @@
 import { useRef, useState } from "react";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { Upload, Image as ImageIcon, FileText, Stethoscope, ScissorsLineDashed, X, Loader2 } from "lucide-react";
+import { Upload, Image as ImageIcon, FileText, Stethoscope, ScissorsLineDashed, X, Loader2, Pencil } from "lucide-react";
 import { storage } from "../../firebase";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreCollection, criarDocumento } from "../../lib/firestore";
+import EditarImagemModal from "./EditarImagemModal";
+
+const EXT_IMAGEM = /\.(jpe?g|png|webp|gif)$/i;
 
 const categoriaIcon = {
   Dermatologia: ImageIcon, Exame: Stethoscope, "Exame de imagem": ImageIcon,
@@ -19,6 +22,7 @@ export default function Imagens() {
   const { clinicaId, pacienteId, pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
   const { data: items, loading } = useFirestoreCollection(`${pacientePath}/imagens`);
   const [preview, setPreview] = useState(null);
+  const [editando, setEditando] = useState(null);
   const [enviando, setEnviando] = useState(false);
   const inputRef = useRef(null);
 
@@ -68,7 +72,7 @@ export default function Imagens() {
           const Icon = categoriaIcon[img.categoria] || ImageIcon;
           return (
             <button key={img.id} onClick={() => setPreview(img)} className="card overflow-hidden text-left hover:shadow-pop transition-shadow focus-ring">
-              {img.url && img.titulo?.match(/\.(jpe?g|png|webp|gif)$/i) ? (
+              {img.url && img.titulo?.match(EXT_IMAGEM) ? (
                 <div className="h-28 bg-cover bg-center" style={{ backgroundImage: `url(${img.url})` }} />
               ) : (
                 <div className={`h-28 bg-gradient-to-br ${categoriaTone[img.categoria] || "from-gray-200 to-gray-300"} flex items-center justify-center`}>
@@ -89,7 +93,7 @@ export default function Imagens() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-ink-900/50" onClick={() => setPreview(null)} />
           <div className="relative bg-white rounded-xl2 shadow-pop max-w-md w-full overflow-hidden animate-slideIn">
-            {preview.url && preview.titulo?.match(/\.(jpe?g|png|webp|gif)$/i) ? (
+            {preview.url && preview.titulo?.match(EXT_IMAGEM) ? (
               <img src={preview.url} alt={preview.titulo} className="w-full h-48 object-cover" />
             ) : (
               <div className={`h-48 bg-gradient-to-br ${categoriaTone[preview.categoria] || "from-gray-200 to-gray-300"} flex items-center justify-center relative`}>
@@ -103,14 +107,36 @@ export default function Imagens() {
               <div className="text-sm font-semibold text-ink-900">{preview.titulo}</div>
               <div className="text-xs text-ink-500 mt-1">{preview.categoria} · {formatarData(preview.criadoEm)}</div>
               <span className="inline-block mt-2 text-[10px] font-semibold bg-brand-50 text-brand-700 px-2 py-0.5 rounded-full">{preview.tag}</span>
-              {preview.url && (
-                <a href={preview.url} target="_blank" rel="noreferrer" className="block mt-3 text-xs font-semibold text-brand-600 hover:text-brand-700">
-                  Abrir arquivo original ↗
-                </a>
-              )}
+              <div className="flex items-center gap-3 mt-3">
+                {preview.url && (
+                  <a href={preview.url} target="_blank" rel="noreferrer" className="text-xs font-semibold text-brand-600 hover:text-brand-700">
+                    Abrir arquivo original ↗
+                  </a>
+                )}
+                {preview.url && preview.titulo?.match(EXT_IMAGEM) && (
+                  <button
+                    onClick={() => { setEditando(preview); setPreview(null); }}
+                    className="flex items-center gap-1 text-xs font-semibold text-ink-500 hover:text-ink-900"
+                  >
+                    <Pencil size={12} /> Editar imagem
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
+      )}
+
+      {editando && (
+        <EditarImagemModal
+          imagem={editando}
+          clinicaId={clinicaId}
+          pacienteId={pacienteId}
+          pacientePath={pacientePath}
+          atendimentoId={atendimentoId}
+          profissionalId={profissionalId}
+          onClose={() => setEditando(null)}
+        />
       )}
     </div>
   );

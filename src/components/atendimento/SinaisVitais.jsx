@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
-import { Activity, Loader2, Save } from "lucide-react";
+import { Activity, Loader2, Save, Smile } from "lucide-react";
 import { useTenant } from "../../context/TenantContext";
 import { useAuth } from "../../context/AuthContext";
 import { useFirestoreCollection, criarDocumento } from "../../lib/firestore";
@@ -22,6 +22,27 @@ const camposNumericos = [
   { key: "saturacao", label: "Saturação de O₂", unit: "%" },
 ];
 
+// Escala de Faces de Wong-Baker (0-10) — as 6 faces/descrições oficiais
+// ficam nos valores pares (0,2,4,6,8,10); os ímpares (1,3,5,7,9) são
+// intermediários e reaproveitam a carinha do par mais próximo, pra dar
+// pra registrar qualquer valor de 0 a 10 (como pedido) mantendo a leitura
+// visual da escala clássica. Útil tanto pro médico registrar o que o
+// paciente relatou (presencial ou por telemedicina) quanto, futuramente,
+// pra um formulário de autopreenchimento do próprio paciente.
+const WONG_BAKER = [
+  { valor: 0, emoji: "😀", label: "Sem dor" },
+  { valor: 1, emoji: "🙂", label: "" },
+  { valor: 2, emoji: "🙂", label: "Dói pouquinho" },
+  { valor: 3, emoji: "😐", label: "" },
+  { valor: 4, emoji: "😐", label: "Dói um pouco mais" },
+  { valor: 5, emoji: "😕", label: "" },
+  { valor: 6, emoji: "😣", label: "Dói ainda mais" },
+  { valor: 7, emoji: "😖", label: "" },
+  { valor: 8, emoji: "😖", label: "Dói muito" },
+  { valor: 9, emoji: "😫", label: "" },
+  { valor: 10, emoji: "😭", label: "Pior dor possível" },
+];
+
 export default function SinaisVitais() {
   const { clinicaId, pacienteId, pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
   const { user } = useAuth();
@@ -39,10 +60,11 @@ export default function SinaisVitais() {
         profissionalId,
         ativo: true,
       });
-      const resumo = camposNumericos
+      const partesResumo = camposNumericos
         .filter((f) => form[f.key])
-        .map((f) => `${f.label} ${form[f.key]} ${f.unit}`)
-        .join(", ");
+        .map((f) => `${f.label} ${form[f.key]} ${f.unit}`);
+      if (form.escalaDor !== undefined && form.escalaDor !== "") partesResumo.push(`Escala de Dor ${form.escalaDor}/10`);
+      const resumo = partesResumo.join(", ");
       if (resumo) {
         registrarHistoricoClinico(clinicaId, pacienteId, {
           tipo: "sinaisVitais", acao: "registrou", resumo,
@@ -79,6 +101,40 @@ export default function SinaisVitais() {
             </div>
           ))}
         </div>
+
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-semibold text-ink-900 flex items-center gap-1.5"><Smile size={14} className="text-brand-500" /> Escala de Dor (Wong-Baker)</span>
+            {form.escalaDor !== undefined && form.escalaDor !== "" && (
+              <span className="text-xs font-bold text-brand-700">{form.escalaDor}/10</span>
+            )}
+          </div>
+          <div className="flex flex-wrap justify-between gap-1.5">
+            {WONG_BAKER.map((f) => (
+              <button
+                key={f.valor}
+                type="button"
+                onClick={() => setForm({ ...form, escalaDor: String(f.valor) })}
+                title={f.label || `${f.valor}`}
+                className={`flex flex-col items-center gap-0.5 w-[8%] min-w-[36px] py-1.5 rounded-lg border transition-colors ${
+                  String(form.escalaDor) === String(f.valor)
+                    ? "border-brand-500 bg-brand-50 ring-2 ring-brand-200"
+                    : "border-transparent hover:bg-gray-50"
+                }`}
+              >
+                <span className="text-xl leading-none">{f.emoji}</span>
+                <span className="text-[10px] text-ink-500">{f.valor}</span>
+              </button>
+            ))}
+          </div>
+          {form.escalaDor !== undefined && form.escalaDor !== "" && (
+            <div className="flex items-center justify-between mt-2">
+              <p className="text-[11px] text-ink-500">{WONG_BAKER[Number(form.escalaDor)]?.label || WONG_BAKER.find((f) => f.valor === Number(form.escalaDor))?.label}</p>
+              <button type="button" onClick={() => setForm({ ...form, escalaDor: "" })} className="text-[10px] text-ink-500 hover:text-rose-600">Limpar</button>
+            </div>
+          )}
+        </div>
+
         <button onClick={salvar} disabled={salvando || !firebaseConfigured} className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring">
           {salvando ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Registrar sinais vitais
         </button>

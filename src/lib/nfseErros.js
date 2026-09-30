@@ -5,6 +5,29 @@
 // cru pra entender o que aconteceu — o XML completo continua disponível
 // como "ver mais", pra quem quiser conferir tudo.
 
+/** Alguns métodos do webservice da NFS-e devolvem o XML de verdade
+ * aninhado dentro de uma tag <RetornoXML> do envelope SOAP, como TEXTO
+ * ESCAPADO em entidades HTML (`&lt;Sucesso&gt;true&lt;/Sucesso&gt;`) em vez
+ * de XML de verdade — daí toda extração abaixo (<Sucesso>, <Erro>,
+ * <ChaveNFe>...) precisar passar por aqui primeiro, senão nunca bate com
+ * o texto escapado. Sem efeito quando a resposta já vier normal (o
+ * backend já salva normalizado desde esse ajuste — isso aqui cobre notas
+ * antigas que ainda tenham a resposta salva "crua"). */
+function normalizarRespostaNfse(xmlBruto) {
+  if (!xmlBruto) return xmlBruto;
+  const aninhado = xmlBruto.match(/<(?:\w+:)?RetornoXML[^>]*>([\s\S]*?)<\/(?:\w+:)?RetornoXML>/i);
+  const interno = aninhado ? aninhado[1] : xmlBruto;
+  return interno
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&"); // por último, senão "&amp;lt;" viraria "<" (decodificação dupla)
+}
+
+export { normalizarRespostaNfse };
+
 // Dicas em português claro pros códigos mais relevantes — sobretudo os de
 // cancelamento (1301-1306, manual v3.3.8 item 4.5.1) e alguns comuns de
 // emissão. Quando o código não estiver aqui, a <Descricao> que a própria
@@ -24,8 +47,9 @@ const DICAS_POR_CODIGO = {
 /** Extrai todos os blocos <Erro> e <Alerta> do XML de retorno, cada um com
  * código, descrição (texto já em português da própria Prefeitura) e, se
  * houver, uma dica adicional nossa. */
-export function extrairErrosAmigaveis(xmlRetorno) {
-  if (!xmlRetorno) return [];
+export function extrairErrosAmigaveis(xmlRetornoBruto) {
+  if (!xmlRetornoBruto) return [];
+  const xmlRetorno = normalizarRespostaNfse(xmlRetornoBruto);
   const itens = [];
   const padroes = [
     { regex: /<Erro[^>]*>([\s\S]*?)<\/Erro>/gi, tipo: "erro" },
@@ -46,15 +70,16 @@ export function extrairErrosAmigaveis(xmlRetorno) {
 }
 
 export function respostaFoiSucesso(xmlRetorno) {
-  return /<Sucesso>true<\/Sucesso>/i.test(xmlRetorno || "");
+  return /<Sucesso>true<\/Sucesso>/i.test(normalizarRespostaNfse(xmlRetorno) || "");
 }
 
 /** Extrai Inscrição do Prestador, Número da NF-e e Código de Verificação
  * do <ChaveNFe> presente na resposta de emissão já salva — usado pra
  * pré-preencher o formulário de cancelamento sem precisar guardar esses
  * campos separadamente (a emissão continua salvando só o XML cru). */
-export function extrairChaveNFe(xmlRetorno) {
-  if (!xmlRetorno) return {};
+export function extrairChaveNFe(xmlRetornoBruto) {
+  if (!xmlRetornoBruto) return {};
+  const xmlRetorno = normalizarRespostaNfse(xmlRetornoBruto);
   const bloco = xmlRetorno.match(/<ChaveNFe>([\s\S]*?)<\/ChaveNFe>/i)?.[1] || "";
   const inscricaoPrestador = bloco.match(/<InscricaoPrestador>([\s\S]*?)<\/InscricaoPrestador>/i)?.[1]?.trim();
   const numeroNfe = (bloco.match(/<NumeroNFe>([\s\S]*?)<\/NumeroNFe>/i) || bloco.match(/<Numero>([\s\S]*?)<\/Numero>/i))?.[1]?.trim();

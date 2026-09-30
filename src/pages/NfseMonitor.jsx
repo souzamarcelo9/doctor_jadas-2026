@@ -4,7 +4,7 @@ import { Receipt, CheckCircle2, Clock3, XCircle, Copy, Check, AlertTriangle, Ref
 import { useTenant } from "../context/TenantContext";
 import { useFirestoreCollection, useFirestoreDoc } from "../lib/firestore";
 import { nfseEmitir, nfseRecalcularStatus, nfseCancelar } from "../lib/nfse";
-import { extrairErrosAmigaveis, extrairChaveNFe } from "../lib/nfseErros";
+import { extrairErrosAmigaveis, extrairChaveNFe, normalizarRespostaNfse } from "../lib/nfseErros";
 
 const statusTone = {
   autorizada: { label: "Autorizada", tone: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
@@ -201,9 +201,9 @@ function DetalheNota({ nota, clinicaId, clinica }) {
       )}
 
       {nota.xmlEnviado && <BlocoXml titulo="XML enviado (RPS)" conteudo={nota.xmlEnviado} />}
-      {nota.respostaWebservice && <BlocoXml titulo="XML de retorno da Prefeitura (emissão)" conteudo={nota.respostaWebservice} />}
+      {nota.respostaWebservice && <BlocoXml titulo="XML de retorno da Prefeitura (emissão)" conteudo={normalizarRespostaNfse(nota.respostaWebservice)} />}
       {nota.xmlCancelamentoEnviado && <BlocoXml titulo="XML enviado (cancelamento)" conteudo={nota.xmlCancelamentoEnviado} />}
-      {nota.respostaCancelamento && <BlocoXml titulo="XML de retorno da Prefeitura (cancelamento)" conteudo={nota.respostaCancelamento} />}
+      {nota.respostaCancelamento && <BlocoXml titulo="XML de retorno da Prefeitura (cancelamento)" conteudo={normalizarRespostaNfse(nota.respostaCancelamento)} />}
 
       {!nota.xmlEnviado && !nota.respostaWebservice && !nota.erroWebservice && (
         <div className="card p-4 text-xs text-ink-500">Essa tentativa ainda não tem XML registrado (pode ser de antes dessa funcionalidade existir, ou ainda está pendente de envio).</div>

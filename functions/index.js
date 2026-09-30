@@ -811,8 +811,9 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   const notaRef = db.doc(`clinicas/${clinicaId}/notasFiscais/${notaFiscalId}`);
 
   try {
-    const respostaXml = await enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha);
-    logger.info("Prefeitura respondeu (modo teste):", respostaXml.slice(0, 2000));
+    const respostaXmlBruta = await enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha);
+    logger.info("Prefeitura respondeu (modo teste):", respostaXmlBruta.slice(0, 2000));
+    const respostaXml = normalizarRespostaNfse(respostaXmlBruta);
     const resumo = extrairResumoXml(respostaXml);
     // <Sucesso> é o indicador oficial e definitivo do próprio webservice —
     // usamos ele pra decidir o status final, não mais um "processando"
@@ -822,7 +823,7 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
     await notaRef.update({
       status,
       xmlEnviado: mensagemXml,
-      respostaWebservice: respostaXml,
+      respostaWebservice: respostaXml, // já normalizado (desembrulhado + decodificado) — mais legível e confiável pra tudo que lê isso depois
       resumoResposta: resumo,
       enviadoEm: new Date().toISOString(),
     });
@@ -996,8 +997,9 @@ exports.nfseCancelar = onCall({ region: REGION, timeoutSeconds: 60 }, async (req
 </soap:Envelope>`;
 
   try {
-    const respostaXml = await enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha);
-    logger.info("Prefeitura respondeu ao cancelamento:", respostaXml.slice(0, 2000));
+    const respostaXmlBruta = await enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha);
+    logger.info("Prefeitura respondeu ao cancelamento:", respostaXmlBruta.slice(0, 2000));
+    const respostaXml = normalizarRespostaNfse(respostaXmlBruta); // mesmo desembrulho/decodificação de normalizarRespostaNfse usado em nfseEmitir — ver comentário lá
     const sucessoMatch = respostaXml.match(/<Sucesso>(true|false)<\/Sucesso>/i);
     const cancelada = sucessoMatch?.[1]?.toLowerCase() === "true";
     await notaRef.update({
@@ -1018,6 +1020,31 @@ exports.nfseCancelar = onCall({ region: REGION, timeoutSeconds: 60 }, async (req
     return { status: "rejeitado_certificado", detalhe };
   }
 });
+
+/** Alguns métodos deste webservice (confirmado em TesteEnvioLoteRPS,
+ * provavelmente também em EnvioLoteRPS e CancelamentoNFe) devolvem o XML de
+ * verdade aninhado dentro de uma tag <RetornoXML> do envelope SOAP, mas
+ * como TEXTO ESCAPADO em entidades HTML (`&lt;Sucesso&gt;true&lt;/Sucesso&gt;`)
+ * em vez de XML de verdade — provavelmente porque o método ASMX subjacente
+ * devolve uma `string`, não um elemento XML nativo. Isso fazia toda a
+ * extração de status/erro (`<Sucesso>`, `<Erro>`, `<ChaveNFe>` etc.) falhar
+ * silenciosamente, porque o texto literal nunca batia com `<Sucesso>` —
+ * batia com `&lt;Sucesso&gt;`. Normaliza os dois passos (desembrulha
+ * <RetornoXML> se existir, decodifica entidades) antes de qualquer extração
+ * — sem efeito quando a resposta já vem como XML "normal" (sem essa
+ * camada), então é seguro aplicar sempre. */
+function normalizarRespostaNfse(xmlBruto) {
+  if (!xmlBruto) return xmlBruto;
+  const aninhado = xmlBruto.match(/<(?:\w+:)?RetornoXML[^>]*>([\s\S]*?)<\/(?:\w+:)?RetornoXML>/i);
+  const interno = aninhado ? aninhado[1] : xmlBruto;
+  return interno
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&"); // por último, senão "&amp;lt;" viraria "<" (decodificação dupla)
+}
 
 /** Tenta extrair uma mensagem de erro/status legível de dentro do XML de
  * retorno da Prefeitura, procurando pelas tags mais comuns de erro/sucesso
@@ -1852,11 +1879,26 @@ exports.nfseRecalcularStatus = onCall({ region: REGION, timeoutSeconds: 120 }, a
   for (const doc of snap.docs) {
     const dados = doc.data();
     if (!dados.respostaWebservice) continue;
-    const m = dados.respostaWebservice.match(/<Sucesso>(true|false)<\/Sucesso>/i);
-    if (!m) continue;
-    const novoStatus = m[1].toLowerCase() === "true" ? "autorizada" : "rejeitada";
-    if (dados.status !== novoStatus) {
-      await doc.ref.update({ status: novoStatus });
+    // Normaliza (desembrulha <RetornoXML> + decodifica entidades) antes de
+    // procurar <Sucesso> — notas emitidas antes desse ajuste ficaram com o
+    // respostaWebservice salvo "cru" (escapado), e o <Sucesso> nunca batia.
+    // Reescreve o campo já normalizado de quebra, pra próxima vez que
+    // alguém abrir essa nota no monitor já vir legível (sem precisar rodar
+    // "Recalcular" de novo).
+    const normalizado = normalizarRespostaNfse(dados.respostaWebservice);
+    const m = normalizado.match(/<Sucesso>(true|false)<\/Sucesso>/i);
+    const atualizacao = {};
+    if (normalizado !== dados.respostaWebservice) {
+      atualizacao.respostaWebservice = normalizado;
+      const novoResumo = extrairResumoXml(normalizado);
+      if (novoResumo && novoResumo !== dados.resumoResposta) atualizacao.resumoResposta = novoResumo;
+    }
+    if (m) {
+      const novoStatus = m[1].toLowerCase() === "true" ? "autorizada" : "rejeitada";
+      if (dados.status !== novoStatus) atualizacao.status = novoStatus;
+    }
+    if (Object.keys(atualizacao).length > 0) {
+      await doc.ref.update(atualizacao);
       atualizadas += 1;
     }
   }

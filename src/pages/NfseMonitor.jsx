@@ -5,6 +5,7 @@ import { useTenant } from "../context/TenantContext";
 import { useFirestoreCollection, useFirestoreDoc } from "../lib/firestore";
 import { nfseEmitir, nfseRecalcularStatus, nfseCancelar } from "../lib/nfse";
 import { extrairErrosAmigaveis, extrairChaveNFe, normalizarRespostaNfse } from "../lib/nfseErros";
+import NfseDocumentoAcoes from "../components/NfseDocumentoAcoes";
 
 const statusTone = {
   autorizada: { label: "Autorizada", tone: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
@@ -159,6 +160,13 @@ function DetalheNota({ nota, clinicaId, clinica }) {
         </div>
         {erroReenvio && <p className="text-xs text-rose-600 mt-2">{erroReenvio}</p>}
       </div>
+
+      {nota.status === "autorizada" && (
+        <div className="card p-4">
+          <div className="text-xs font-semibold text-ink-900 mb-2">Documento da NFS-e</div>
+          <NfseDocumentoAcoes clinicaId={clinicaId} nota={nota} />
+        </div>
+      )}
 
       {mostrarCancelar && nota.status === "autorizada" && (
         <PainelCancelamento clinicaId={clinicaId} nota={nota} onFechar={() => setMostrarCancelar(false)} />

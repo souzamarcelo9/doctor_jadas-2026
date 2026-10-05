@@ -50,3 +50,12 @@ export async function nfseCancelar(clinicaId, notaFiscalId, dadosOverride) {
   const { data } = await chamar({ clinicaId, notaFiscalId, dadosOverride: dadosOverride || null });
   return data; // { status, detalhe }
 }
+/** Envia por e-mail ao paciente o link oficial da NFS-e já autorizada. O
+ * link é montado no servidor a partir da resposta da Prefeitura salva na
+ * nota — aqui só se informa o destinatário. */
+export async function nfseEnviarPorEmail(clinicaId, notaFiscalId, email) {
+  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
+  const chamar = httpsCallable(functionsInstance, "nfseEnviarPorEmail");
+  const { data } = await chamar({ clinicaId, notaFiscalId, email });
+  return data; // { ok }
+}

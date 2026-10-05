@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Link } from "react-router-dom";
 import Topbar from "../components/Topbar";
-import { Receipt, PlugZap, Send, Clock3, CheckCircle2, AlertTriangle, Loader2, XCircle, Link2, Monitor, ChevronLeft, ChevronRight } from "lucide-react";
+import NfseDocumentoAcoes from "../components/NfseDocumentoAcoes";
+import { Receipt, PlugZap, Send, Clock3, CheckCircle2, AlertTriangle, Loader2, XCircle, Link2, Monitor, ChevronLeft, ChevronRight, FileDown } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
 import { useFirestoreDoc, useFirestoreCollection, criarDocumento, atualizarDocumento } from "../lib/firestore";
 import { nfseEmitir } from "../lib/nfse";
@@ -22,6 +23,7 @@ export default function NotasFiscais() {
   const [issuing, setIssuing] = useState(false);
   const [resultado, setResultado] = useState(null);
   const [contaVinculadaId, setContaVinculadaId] = useState("");
+  const [notaAberta, setNotaAberta] = useState(null);
   const [form, setForm] = useState({ tomador: "", cpfCnpj: "", codigoServico: "", valor: "", aliquota: "", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
   const [pagina, setPagina] = useState(1);
   const ITENS_POR_PAGINA = 10;
@@ -219,19 +221,36 @@ export default function NotasFiscais() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-left text-ink-500 border-b border-black/5">
-                  <Th>Tomador</Th><Th>Valor</Th><Th>Data</Th><Th>Status</Th>
+                  <Th>Tomador</Th><Th>Valor</Th><Th>Data</Th><Th>Status</Th><Th>Documento</Th>
                 </tr>
               </thead>
               <tbody>
                 {historicoPagina.map((n) => {
                   const S = statusTone[n.status] || statusTone.pendente;
+                  const emailSugerido = contasReceber.find((c) => c.notaFiscalId === n.id)?.pacienteEmail || "";
                   return (
-                    <tr key={n.id} className="border-b border-black/5 last:border-0">
-                      <Td>{n.tomador}</Td>
-                      <Td>{(n.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</Td>
-                      <Td>{n.criadoEm?.toDate ? n.criadoEm.toDate().toLocaleDateString("pt-BR") : "—"}</Td>
-                      <Td><span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${S.tone}`}><S.icon size={11} /> {S.label}</span></Td>
-                    </tr>
+                    <Fragment key={n.id}>
+                      <tr className="border-b border-black/5 last:border-0">
+                        <Td>{n.tomador}</Td>
+                        <Td>{(n.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</Td>
+                        <Td>{n.criadoEm?.toDate ? n.criadoEm.toDate().toLocaleDateString("pt-BR") : "—"}</Td>
+                        <Td><span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${S.tone}`}><S.icon size={11} /> {S.label}</span></Td>
+                        <Td>
+                          {n.status === "autorizada" ? (
+                            <button onClick={() => setNotaAberta(notaAberta === n.id ? null : n.id)} className="flex items-center gap-1 text-[11px] font-semibold text-brand-600 hover:text-brand-700">
+                              <FileDown size={13} /> {notaAberta === n.id ? "Fechar" : "Abrir / enviar"}
+                            </button>
+                          ) : "—"}
+                        </Td>
+                      </tr>
+                      {notaAberta === n.id && (
+                        <tr className="border-b border-black/5 bg-gray-50/50">
+                          <td colSpan={5} className="px-4 py-3">
+                            <NfseDocumentoAcoes clinicaId={clinicaId} nota={n} emailSugerido={emailSugerido} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
               </tbody>

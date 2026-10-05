@@ -1053,6 +1053,90 @@ exports.nfseCancelar = onCall({ region: REGION, timeoutSeconds: 60 }, async (req
   }
 });
 
+/** Link da página oficial da Prefeitura que exibe/imprime a NFS-e — mesma
+ * lógica de montarLinkNfse em src/lib/nfseErros.js (duplicada porque
+ * client e functions são bundles separados). */
+function montarLinkNfse({ inscricaoPrestador, numeroNfe, codigoVerificacao } = {}) {
+  const ins = String(inscricaoPrestador || "").replace(/\D/g, "");
+  const nf = String(numeroNfe || "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+  const ver = String(codigoVerificacao || "").replace(/[^A-Za-z0-9]/g, "");
+  if (!ins || !nf || !ver) return null;
+  return `https://nfe.prefeitura.sp.gov.br/contribuinte/notaprint.aspx?inscricao=${ins}&nf=${nf}&verificacao=${ver}`;
+}
+
+const escaparHtml = (v) =>
+  String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+/**
+ * Envia por e-mail ao paciente o link oficial da NFS-e já autorizada
+ * (mesma infra Resend de enviarComprovanteFinanceiro). O link é montado
+ * AQUI, a partir da resposta da Prefeitura salva na nota — o cliente só
+ * informa o destinatário, nunca o conteúdo. Qualquer membro ativo da
+ * clínica pode chamar (a secretária é quem encaminha a nota).
+ *
+ * Entrada:  { clinicaId, notaFiscalId, email }
+ * Saída:    { ok: true }
+ */
+exports.nfseEnviarPorEmail = onCall({ region: REGION, timeoutSeconds: 30, secrets: [resendApiKey] }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId, notaFiscalId, email } = request.data || {};
+  if (!clinicaId || !notaFiscalId) throw new HttpsError("invalid-argument", "Dados incompletos.");
+  const destino = String(email || "").trim();
+  if (destino.length > 150 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(destino)) {
+    throw new HttpsError("invalid-argument", "Informe um e-mail válido.");
+  }
+
+  const membroSnap = await db.doc(`clinicas/${clinicaId}/membros/${request.auth.uid}`).get();
+  if (!membroSnap.exists || membroSnap.data().ativo !== true) {
+    throw new HttpsError("permission-denied", "Você precisa ser membro desta clínica.");
+  }
+  if (!resendApiKey.value()) {
+    throw new HttpsError("failed-precondition", "Envio de e-mail ainda não configurado neste ambiente (RESEND_API_KEY ausente). Avise o administrador do sistema.");
+  }
+
+  const notaRef = db.doc(`clinicas/${clinicaId}/notasFiscais/${notaFiscalId}`);
+  const notaSnap = await notaRef.get();
+  if (!notaSnap.exists) throw new HttpsError("not-found", "Nota fiscal não encontrada.");
+  const nota = notaSnap.data();
+  if (nota.status === "cancelada") throw new HttpsError("failed-precondition", "Essa NFS-e foi cancelada — não é possível enviá-la.");
+  if (nota.status !== "autorizada") throw new HttpsError("failed-precondition", "Só é possível enviar NFS-e já autorizadas.");
+
+  const chave = extrairChaveNFeDoRetorno(normalizarRespostaNfse(nota.respostaWebservice));
+  const link = montarLinkNfse(chave);
+  if (!link) {
+    throw new HttpsError("failed-precondition", "Esta nota não tem Número/Código de Verificação da Prefeitura — comum em notas emitidas em modo de teste, que não geram NFS-e real.");
+  }
+
+  const clinicaSnap = await db.doc(`clinicas/${clinicaId}`).get();
+  const clinicaNome = clinicaSnap.data()?.nome || "sua clínica";
+  const primeiroNome = (nota.tomador || "").split(" ")[0] || "";
+
+  try {
+    await enviarEmailResend({
+      para: destino,
+      assunto: `Sua NFS-e — ${clinicaNome}`,
+      html: `
+        <p>Olá${primeiroNome ? `, ${escaparHtml(primeiroNome)}` : ""}!</p>
+        <p>Segue a Nota Fiscal de Serviços Eletrônica (NFS-e) do seu atendimento na ${escaparHtml(clinicaNome)}.</p>
+        <p><a href="${link}" style="display:inline-block;background:#0d9488;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">Ver NFS-e</a></p>
+        <p style="color:#555;font-size:13px">Guarde este documento — ele pode ser usado, por exemplo, para solicitar reembolso junto ao seu plano de saúde.</p>
+        <p style="color:#888;font-size:12px">Número da nota: ${escaparHtml(chave.numeroNfe)} · Código de verificação: ${escaparHtml(chave.codigoVerificacao)}<br/>
+        Se o botão não funcionar, copie e cole este link no navegador: ${link}</p>
+      `,
+    });
+  } catch (err) {
+    logger.error("Falha ao enviar NFS-e por e-mail via Resend:", err);
+    throw new HttpsError("internal", "Não foi possível enviar o e-mail. Verifique a configuração do Resend (domínio verificado, RESEND_API_KEY).");
+  }
+
+  await notaRef.update({
+    nfseEnviadaEmailPara: destino,
+    nfseEnviadaEmailEm: new Date().toISOString(),
+    nfseEnviadaEmailPor: request.auth.uid,
+  });
+  return { ok: true };
+});
+
 /** Alguns métodos deste webservice (confirmado em TesteEnvioLoteRPS,
  * provavelmente também em EnvioLoteRPS e CancelamentoNFe) devolvem o XML de
  * verdade aninhado dentro de uma tag <RetornoXML> do envelope SOAP, mas

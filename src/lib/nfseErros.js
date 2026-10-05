@@ -86,3 +86,19 @@ export function extrairChaveNFe(xmlRetornoBruto) {
   const codigoVerificacao = bloco.match(/<CodigoVerificacao>([\s\S]*?)<\/CodigoVerificacao>/i)?.[1]?.trim();
   return { inscricaoPrestador, numeroNfe, codigoVerificacao };
 }
+
+/** Monta o link da página oficial da Prefeitura de SP que exibe/imprime a
+ * NFS-e (a mesma que o próprio portal usa pra "segunda via"). O webservice
+ * só devolve XML — não existe método que entregue o PDF — então o
+ * documento "no formato da Prefeitura" é esta página. Formato do link
+ * observado em links públicos reais de notas emitidas (não está descrito
+ * no manual do webservice); confirmar com a primeira nota real em
+ * produção. Retorna null se faltar algum dado da chave (caso das notas
+ * emitidas em modo de teste, que não geram NFS-e de verdade). */
+export function montarLinkNfse({ inscricaoPrestador, numeroNfe, codigoVerificacao } = {}) {
+  const ins = String(inscricaoPrestador || "").replace(/\D/g, "");
+  const nf = String(numeroNfe || "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+  const ver = String(codigoVerificacao || "").replace(/[^A-Za-z0-9]/g, "");
+  if (!ins || !nf || !ver) return null;
+  return `https://nfe.prefeitura.sp.gov.br/contribuinte/notaprint.aspx?inscricao=${ins}&nf=${nf}&verificacao=${ver}`;
+}

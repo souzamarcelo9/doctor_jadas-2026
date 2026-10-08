@@ -78,6 +78,8 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
   }));
 
   const { data: convenios } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/convenios` : null, "nome", "asc");
+  // Só os ativos aparecem no combo (mantém o já selecionado num agendamento antigo, mesmo desativado).
+  const conveniosAtivos = convenios.filter((c) => c.ativo !== false || c.id === agendaForm.convenioId);
   const { data: servicos } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/servicos` : null, "nome", "asc");
   const { data: especialidades, loading: carregandoEspecialidades } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/especialidades` : null, "nome", "asc");
 
@@ -466,7 +468,7 @@ export default function AgendamentoModal({ slot, dateISO, clinicaId, profissiona
             <SelectField label="Tipo atendimento" value={agendaForm.tipoAtendimento} onChange={(v) => setAgendaForm({ ...agendaForm, tipoAtendimento: v })} options={TIPOS_ATENDIMENTO} />
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <SelectField label="Convênio" value={agendaForm.convenioId} onChange={(v) => setAgendaForm({ ...agendaForm, convenioId: v })} options={convenios.map((c) => c.id)} labels={Object.fromEntries(convenios.map((c) => [c.id, c.nome]))} placeholder="Particular" />
+            <SelectField label="Convênio" value={agendaForm.convenioId} onChange={(v) => setAgendaForm({ ...agendaForm, convenioId: v })} options={conveniosAtivos.map((c) => c.id)} labels={Object.fromEntries(conveniosAtivos.map((c) => [c.id, c.nome]))} placeholder="Particular" />
             <Field label="Carteirinha" value={agendaForm.carteirinha} maxLength={LIMITES.carteirinha} onChange={(v) => setAgendaForm({ ...agendaForm, carteirinha: v })} />
           </div>
           <div className="grid grid-cols-2 gap-3">

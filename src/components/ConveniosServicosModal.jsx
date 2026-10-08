@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { X, Handshake, Stethoscope, GraduationCap, Plus, Trash2, Loader2, Power, AlertTriangle } from "lucide-react";
+import { X, Handshake, Stethoscope, GraduationCap, Plus, Trash2, Loader2, Power, AlertTriangle, Download } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
 import { useFirestoreCollection, criarDocumento, atualizarDocumento, excluirDocumento } from "../lib/firestore";
+import { importarConveniosPadrao, CONVENIOS_PADRAO } from "../lib/convenios";
 
 export default function ConveniosServicosModal({ open, onClose }) {
   const { clinicaId } = useTenant();
@@ -56,6 +57,22 @@ function ListaConvenios({ clinicaId }) {
     }
   }
 
+  const [importando, setImportando] = useState(false);
+  const [aviso, setAviso] = useState("");
+  async function importarPadrao() {
+    setErro(""); setAviso("");
+    setImportando(true);
+    try {
+      const qtd = await importarConveniosPadrao(clinicaId, convenios);
+      setAviso(qtd ? `${qtd} convênio(s) importado(s).` : "Todos os convênios da lista padrão já estão cadastrados.");
+    } catch (err) {
+      console.error("Erro ao importar convênios:", err);
+      setErro(err.message || "Não foi possível importar (só administradores podem alterar convênios).");
+    } finally {
+      setImportando(false);
+    }
+  }
+
   async function alternarAtivo(c) {
     await atualizarDocumento(`clinicas/${clinicaId}/convenios`, c.id, { ativo: !c.ativo });
   }
@@ -73,6 +90,10 @@ function ListaConvenios({ clinicaId }) {
           {salvando ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Adicionar
         </button>
       </form>
+      <button type="button" onClick={importarPadrao} disabled={importando} className="w-full flex items-center justify-center gap-1.5 text-xs font-semibold text-brand-700 bg-brand-50 hover:bg-brand-100 disabled:opacity-60 px-3 py-2 rounded-lg focus-ring">
+        {importando ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Importar lista padrão ({CONVENIOS_PADRAO.length} convênios) — não duplica os já cadastrados
+      </button>
+      {aviso && <div className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-lg p-3">{aviso}</div>}
       {erro && <div className="flex items-start gap-2 text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-3"><AlertTriangle size={13} className="mt-0.5 shrink-0" /> {erro}</div>}
 
       <div className="space-y-1.5">

@@ -756,7 +756,14 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   }
 
   const tipoAtendimento = (dados.tipoAtendimento || "presencial").toLowerCase();
-  const cIndOp = tipoAtendimento === "teleconsulta" ? CIND_OP.teleconsulta : tipoAtendimento === "domiciliar" ? CIND_OP.domiciliar : CIND_OP.presencial;
+  // cIndOp: se a tela mandou um código (ajuste da nota ou padrão da clínica em
+  // Dados Fiscais), ele vale; senão cai no automático pelo tipo de atendimento.
+  const cIndOpInformado = String(dados.cIndOp || "").trim();
+  if (cIndOpInformado && !/^\d{6}$/.test(cIndOpInformado)) {
+    throw new HttpsError("invalid-argument", "Indicador de operação (cIndOp) inválido — deve ter 6 dígitos (ex: 030101).");
+  }
+  const cIndOp = cIndOpInformado
+    || (tipoAtendimento === "teleconsulta" ? CIND_OP.teleconsulta : tipoAtendimento === "domiciliar" ? CIND_OP.domiciliar : CIND_OP.presencial);
 
   const rps = {
     layoutVersao,
@@ -765,7 +772,7 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
     serie: "UNICA",
     dataEmissao: new Date().toISOString().slice(0, 10),
     tipoTributacao: "T",
-    issRetido: false,
+    issRetido: dados.issRetido === true,
     valorFinalCobrado: Number(dados.valorServicos) || 0,
     valorDeducoes: 0,
     codigoServico: dados.codigoServico || "04030", // Medicina e biomedicina (PJ) — item 4.01, Anexo 1 IN SF/SUREM 08/2011 (atualizado até IN 03/2026)

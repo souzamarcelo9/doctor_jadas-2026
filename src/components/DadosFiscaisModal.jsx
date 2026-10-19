@@ -2,6 +2,8 @@ import { useState } from "react";
 import { X, Landmark, Loader2, AlertTriangle, CheckCircle2, Save } from "lucide-react";
 import { useTenant } from "../context/TenantContext";
 import { useFirestoreDoc, atualizarDocumento } from "../lib/firestore";
+import CampoCIndOp from "./CampoCIndOp";
+import { cIndOpValido } from "../lib/nfseCodigos";
 
 function apenasDigitos(v) {
   return (v || "").replace(/\D/g, "");
@@ -29,6 +31,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
     aliquotaIssPadrao: form.aliquotaIssPadrao ?? clinica?.aliquotaIssPadrao ?? "0.02",
     nbsPadrao: form.nbsPadrao ?? clinica?.nbsPadrao ?? "123012100",
     cClassTribPadrao: form.cClassTribPadrao ?? clinica?.cClassTribPadrao ?? "200029",
+    cIndOpPadrao: form.cIndOpPadrao ?? clinica?.cIndOpPadrao ?? "",
     simplesNacional: form.simplesNacional ?? clinica?.simplesNacional ?? false,
   };
 
@@ -37,6 +40,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
     setSucesso(false);
     if (apenasDigitos(valores.cnpj).length !== 14) { setErro("CNPJ precisa ter 14 dígitos."); return; }
     if (!apenasDigitos(valores.inscricaoMunicipal)) { setErro("Informe a Inscrição Municipal (CCM)."); return; }
+    if (valores.cIndOpPadrao && !cIndOpValido(valores.cIndOpPadrao)) { setErro("O Indicador de Operação (cIndOp) precisa ter 6 dígitos."); return; }
     setSalvando(true);
     try {
       await atualizarDocumento("clinicas", clinicaId, {
@@ -46,6 +50,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
         aliquotaIssPadrao: valores.aliquotaIssPadrao.trim(),
         nbsPadrao: valores.nbsPadrao.trim(),
         cClassTribPadrao: valores.cClassTribPadrao.trim(),
+        cIndOpPadrao: valores.cIndOpPadrao || "",
         simplesNacional: valores.simplesNacional,
       });
       setSucesso(true);
@@ -122,6 +127,11 @@ export default function DadosFiscaisModal({ open, onClose }) {
                     <span className="text-ink-500 font-medium">cClassTrib</span>
                     <input value={valores.cClassTribPadrao} onChange={(e) => setForm({ ...form, cClassTribPadrao: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
                   </label>
+                </div>
+                <div className="block text-xs mt-3">
+                  <span className="text-ink-500 font-medium">Indicador de Operação (cIndOp) padrão</span>
+                  <CampoCIndOp className="mt-1" value={valores.cIndOpPadrao} onChange={(v) => setForm({ ...form, cIndOpPadrao: v })} rotuloVazio="Automático — conforme o tipo de atendimento da nota" />
+                  <span className="text-[11px] text-ink-500 block mt-1">No "Automático", o sistema escolhe sozinho: presencial → 030101, domiciliar → 030104, teleconsulta → 100301. Defina um código aqui só se o contador orientar um enquadramento fixo; ele ainda pode ser ajustado nota a nota na emissão.</span>
                 </div>
                 <p className="text-[11px] text-ink-500 mt-1.5">Padrão: 123012100 (clínica médica geral) / 200029 (serviços de saúde humana). Troque só se a especialidade tiver código próprio no Anexo III da LC 214/2025 (ex: cirúrgico, psiquiátrico, obstétrico).</p>
               </div>

@@ -6,6 +6,10 @@ import { Receipt, PlugZap, Send, Clock3, CheckCircle2, AlertTriangle, Loader2, X
 import { useTenant } from "../context/TenantContext";
 import { useFirestoreDoc, useFirestoreCollection, criarDocumento, atualizarDocumento } from "../lib/firestore";
 import { nfseEmitir } from "../lib/nfse";
+import AutocompletePaciente from "../components/AutocompletePaciente";
+import CampoCIndOp from "../components/CampoCIndOp";
+import { cIndOpAutomatico, cIndOpValido } from "../lib/nfseCodigos";
+import { emailValido } from "../lib/masks";
 
 const statusTone = {
   autorizada: { label: "Autorizada", tone: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
@@ -19,12 +23,13 @@ export default function NotasFiscais() {
   const { clinicaId, firebaseConfigured } = useTenant();
   const { data: clinica } = useFirestoreDoc("clinicas", clinicaId);
   const { data: historico, loading } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/notasFiscais` : null, "criadoEm", "desc");
+  const { data: pacientes } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/pacientes` : null, "nome", "asc");
   const { data: contasReceber } = useFirestoreCollection(clinicaId ? `clinicas/${clinicaId}/contasReceber` : null);
   const [issuing, setIssuing] = useState(false);
   const [resultado, setResultado] = useState(null);
   const [contaVinculadaId, setContaVinculadaId] = useState("");
   const [notaAberta, setNotaAberta] = useState(null);
-  const [form, setForm] = useState({ tomador: "", cpfCnpj: "", codigoServico: "", valor: "", aliquota: "", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
+  const [form, setForm] = useState({ tomador: "", cpfCnpj: "", emailTomador: "", codigoServico: "", valor: "", aliquota: "", discriminacao: "Consulta médica", tipoAtendimento: "presencial", cIndOp: "", issRetido: false });
   const [pagina, setPagina] = useState(1);
   const ITENS_POR_PAGINA = 10;
   const totalPaginas = Math.max(1, Math.ceil(historico.length / ITENS_POR_PAGINA));
@@ -39,6 +44,10 @@ export default function NotasFiscais() {
   // configurado pra clínica em Dados Fiscais, senão 0.02 (piso legal pra
   // serviços de saúde no regime normal em SP — não é universal, ver aviso
   // em Configurações → Dados Fiscais sobre Simples Nacional/SUP).
+  const layoutV2 = !clinica?.simplesNacional;
+  const cIndOpPadraoClinica = clinica?.cIndOpPadrao || "";
+  // Código de fato usado: ajuste da nota > padrão da clínica > automático pelo tipo de atendimento.
+  const cIndOpEfetivo = form.cIndOp || cIndOpPadraoClinica || cIndOpAutomatico(form.tipoAtendimento);
   const aliquotaEfetiva = form.aliquota || clinica?.aliquotaIssPadrao || "0.02";
 
   // Antes só listava contas "pendente" — mas no fluxo recomendado a
@@ -61,6 +70,9 @@ export default function NotasFiscais() {
   async function emitir(e) {
     e.preventDefault();
     if (!form.tomador.trim() || !form.valor) return;
+    if (form.cIndOp && !cIndOpValido(form.cIndOp)) { setResultado({ status: "erro", detalhe: "O Indicador de Operação (cIndOp) precisa ter 6 dígitos." }); return; }
+    if (form.emailTomador && !emailValido(form.emailTomador)) { setResultado({ status: "erro", detalhe: "E-mail do tomador inválido." }); return; }
+    if (form.issRetido && form.cpfCnpj.replace(/\D/g, "").length !== 14) { setResultado({ status: "erro", detalhe: "ISS retido pelo tomador exige o CNPJ do tomador (empresa)." }); return; }
     setIssuing(true);
     setResultado(null);
     try {
@@ -68,6 +80,9 @@ export default function NotasFiscais() {
         tomador: form.tomador, cpfCnpj: form.cpfCnpj, codigoServico: codigoServicoEfetivo,
         valor: Number(form.valor), aliquota: aliquotaEfetiva, discriminacao: form.discriminacao,
         tipoAtendimento: form.tipoAtendimento,
+        emailTomador: form.emailTomador || "",
+        issRetido: form.issRetido,
+        cIndOp: layoutV2 ? cIndOpEfetivo : null,
         status: "pendente",
       });
 
@@ -83,6 +98,8 @@ export default function NotasFiscais() {
         tipoAtendimento: form.tipoAtendimento,
         nbs: clinica?.nbsPadrao,
         cClassTrib: clinica?.cClassTribPadrao,
+        cIndOp: form.cIndOp || cIndOpPadraoClinica || "",
+        issRetido: form.issRetido,
       });
       setResultado(resposta);
 
@@ -106,7 +123,7 @@ export default function NotasFiscais() {
         }
       }
 
-      setForm({ tomador: "", cpfCnpj: "", codigoServico: "", valor: "", aliquota: "", discriminacao: "Consulta médica", tipoAtendimento: "presencial" });
+      setForm({ tomador: "", cpfCnpj: "", emailTomador: "", codigoServico: "", valor: "", aliquota: "", discriminacao: "Consulta médica", tipoAtendimento: "presencial", cIndOp: "", issRetido: false });
       setContaVinculadaId("");
     } catch (err) {
       console.error("Erro ao emitir NFS-e:", err);
@@ -163,8 +180,19 @@ export default function NotasFiscais() {
             )}
 
             <div className="grid sm:grid-cols-2 gap-3">
-              <Field label="Tomador do serviço" value={form.tomador} onChange={(v) => setForm({ ...form, tomador: v })} />
+              <AutocompletePaciente
+                label="Tomador do serviço"
+                value={form.tomador}
+                pacientes={pacientes}
+                onChange={(v) => setForm({ ...form, tomador: v })}
+                onSelecionar={(p) => setForm((f) => ({ ...f, tomador: p.nome, cpfCnpj: p.cpf || f.cpfCnpj, emailTomador: p.email || f.emailTomador }))}
+              />
               <Field label="CPF/CNPJ" value={form.cpfCnpj} onChange={(v) => setForm({ ...form, cpfCnpj: v })} />
+              <Field label="E-mail do tomador (opcional — facilita o envio da nota)" type="email" value={form.emailTomador} onChange={(v) => setForm({ ...form, emailTomador: v })} />
+              <label className="flex items-center gap-2 text-xs text-ink-700 self-end pb-2">
+                <input type="checkbox" checked={form.issRetido} onChange={(e) => setForm({ ...form, issRetido: e.target.checked })} className="rounded accent-brand-600" />
+                ISS retido pelo tomador <span className="text-ink-500">(só se o cliente for o responsável por recolher)</span>
+              </label>
               <Field label="Código de serviço" value={codigoServicoEfetivo} onChange={(v) => setForm({ ...form, codigoServico: v })} />
               {codigoServicoEfetivo === "04030" && (
                 <p className="text-[10px] text-emerald-600 -mt-1.5 col-span-2">✓ 04030 — "Medicina e biomedicina" (PJ), item 4.01, confirmado no Anexo 1 da IN SF/SUREM 08/2011 (atualizado até IN 03/2026).</p>
@@ -183,7 +211,20 @@ export default function NotasFiscais() {
                 </select>
               </label>
             </div>
-            <p className="text-[11px] text-ink-500">Reforma Tributária (IBS/CBS): classificação de serviços de saúde (cClassTrib 200029, NBS de clínica médica) já é aplicada automaticamente — o tipo de atendimento acima só ajusta onde a operação é considerada realizada (cIndOp).</p>
+            {layoutV2 ? (
+              <div className="space-y-1.5">
+                <div className="block text-xs">
+                  <span className="text-ink-500 font-medium">Indicador de Operação (cIndOp)</span>
+                  <CampoCIndOp
+                    className="mt-1" value={form.cIndOp} onChange={(v) => setForm({ ...form, cIndOp: v })}
+                    rotuloVazio={cIndOpPadraoClinica ? `Padrão da clínica (${cIndOpPadraoClinica})` : `Automático pelo tipo de atendimento (${cIndOpAutomatico(form.tipoAtendimento)})`}
+                  />
+                </div>
+                <p className="text-[11px] text-ink-500">Será enviado: <strong>{cIndOpEfetivo}</strong>. O padrão da clínica fica em Configurações → Dados Fiscais. Reforma Tributária (IBS/CBS): NBS e cClassTrib também vêm de Dados Fiscais (hoje {clinica?.nbsPadrao || "123012100"} / {clinica?.cClassTribPadrao || "200029"}).</p>
+              </div>
+            ) : (
+              <p className="text-[11px] text-ink-500">Clínica no Simples Nacional: a nota usa o layout v1 (só ISS), que não leva cIndOp, NBS nem IBS/CBS.</p>
+            )}
             <label className="block text-xs">
               <span className="text-ink-500 font-medium">Discriminação dos serviços</span>
               <textarea rows={3} value={form.discriminacao} onChange={(e) => setForm({ ...form, discriminacao: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring resize-none" />
@@ -227,7 +268,7 @@ export default function NotasFiscais() {
               <tbody>
                 {historicoPagina.map((n) => {
                   const S = statusTone[n.status] || statusTone.pendente;
-                  const emailSugerido = contasReceber.find((c) => c.notaFiscalId === n.id)?.pacienteEmail || "";
+                  const emailSugerido = n.emailTomador || contasReceber.find((c) => c.notaFiscalId === n.id)?.pacienteEmail || "";
                   return (
                     <Fragment key={n.id}>
                       <tr className="border-b border-black/5 last:border-0">

@@ -1205,8 +1205,35 @@ function extrairResumoXml(xml) {
 // detalhes de baixo nível (ordem de cabeçalhos, keep-alive, negociação
 // Expect/100-continue) que o cliente nativo do Node lida de um jeito e o
 // axios de outro.
+// Extrai chave privada + cadeia de certificados em PEM usando o node-forge.
+// Necessário porque muitos .pfx emitidos por ACs brasileiras usam algoritmos
+// legados (ex.: RC2-40 / 3DES com MAC SHA-1, às vezes com BER de tamanho
+// indefinido) que o OpenSSL 3 do Node 18+ recusa com "Unsupported PKCS12 PFX
+// data" quando passados direto em `https.Agent({ pfx })`. O forge lê esses
+// arquivos normalmente (é o mesmo que já usamos pra assinar o XML).
+function extrairPemDoPfx(pfxBuffer, senha) {
+  const asn1 = forge.asn1.fromDer(forge.util.createBuffer(pfxBuffer.toString("binary")));
+  const p12 = forge.pkcs12.pkcs12FromAsn1(asn1, false, senha);
+  const oids = forge.pki.oids;
+  const bagsChave = [
+    ...(p12.getBags({ bagType: oids.pkcs8ShroudedKeyBag })[oids.pkcs8ShroudedKeyBag] || []),
+    ...(p12.getBags({ bagType: oids.keyBag })[oids.keyBag] || []),
+  ];
+  const bagsCert = (p12.getBags({ bagType: oids.certBag })[oids.certBag] || []).filter((b) => b.cert);
+  if (!bagsChave[0]?.key || !bagsCert.length) throw new Error("Certificado sem chave privada ou sem certificado no arquivo .pfx.");
+  const chave = bagsChave[0].key;
+  // Coloca primeiro o certificado cujo par é a chave privada (o "folha"), depois a cadeia.
+  const bate = (c) => c.cert.publicKey?.n && chave.n && c.cert.publicKey.n.equals(chave.n);
+  const ordenados = [...bagsCert.filter(bate), ...bagsCert.filter((c) => !bate(c))];
+  return {
+    key: forge.pki.privateKeyToPem(chave),
+    cert: ordenados.map((c) => forge.pki.certificateToPem(c.cert)).join(""),
+  };
+}
+
 async function enviarSoapComCertificado(soapEnvelope, soapAction, pfxBuffer, senha) {
-  const agent = new https.Agent({ pfx: pfxBuffer, passphrase: senha });
+  const { key, cert } = extrairPemDoPfx(pfxBuffer, senha);
+  const agent = new https.Agent({ key, cert });
   try {
     const resposta = await axios.post(`https://${NFSE_WSDL_HOST}${NFSE_WSDL_PATH}`, soapEnvelope, {
       httpsAgent: agent,

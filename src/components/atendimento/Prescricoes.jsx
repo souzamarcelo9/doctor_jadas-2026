@@ -134,8 +134,16 @@ export default function Prescricoes() {
     moduloProntoPromiseRef.current = new Promise((resolve, reject) => {
       const script = document.createElement("script");
       script.src = MEMED_SCRIPT_URL;
+      // A Memed lê o token do atributo `data-token` (sem ele o script lança
+      // "Token não definido. Utilize o data-token para defini-lo"). O atributo
+      // `token` antigo fica junto por compatibilidade.
+      script.setAttribute("data-token", token);
       script.setAttribute("token", token);
-      script.onerror = () => reject(new Error("Não foi possível carregar o script da Memed."));
+      script.onerror = () => {
+        moduloProntoPromiseRef.current = null; // permite tentar de novo no próximo clique
+        script.remove();
+        reject(new Error("Não foi possível carregar o script da Memed."));
+      };
       document.body.appendChild(script);
       scriptRef.current = script;
 
@@ -153,6 +161,12 @@ export default function Prescricoes() {
       }, 200);
       setTimeout(() => {
         clearInterval(aguardarBiblioteca);
+        if (!window.MdHub) {
+          // Não carregou: descarta a Promise e o script pra o próximo clique recomeçar limpo
+          // (senão a falha ficaria "grudada" até recarregar a página).
+          moduloProntoPromiseRef.current = null;
+          script.remove();
+        }
         reject(new Error("A Memed demorou demais para responder."));
       }, 15000);
     });

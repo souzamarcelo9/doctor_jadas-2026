@@ -284,7 +284,16 @@ exports.memedObterToken = onCall({ region: REGION, secrets: [memedApiKey, memedS
 
   // A chave do parceiro vai na query string (confirmado pela doc oficial —
   // diferente do padrão de header que a maioria das APIs usa).
-  const qs = `apikey=${encodeURIComponent(memedApiKey.value())}&secretkey=${encodeURIComponent(memedSecretKey.value())}`;
+  const chaveApi = String(memedApiKey.value() || "").trim();
+  const chaveSecreta = String(memedSecretKey.value() || "").trim();
+  if (!chaveApi || !chaveSecreta) {
+    logger.error("Secrets da Memed vazios no Secret Manager.", { apiKeyVazia: !chaveApi, secretKeyVazia: !chaveSecreta });
+    throw new HttpsError("failed-precondition", "As chaves da Memed (MEMED_API_KEY / MEMED_SECRET_KEY) estão vazias neste ambiente. Cadastre-as com `firebase functions:secrets:set` e refaça o deploy das functions.", { memedStatus: 0 });
+  }
+  // A doc da Memed nomeia os parâmetros "api-key" e "secret-key" (com hífen).
+  // Os nomes sem hífen ficam junto por compatibilidade — a Memed ignora o que não conhece.
+  const qs = `api-key=${encodeURIComponent(chaveApi)}&secret-key=${encodeURIComponent(chaveSecreta)}&apikey=${encodeURIComponent(chaveApi)}&secretkey=${encodeURIComponent(chaveSecreta)}`;
+  logger.info("Memed: chamando API", { base: MEMED_API_BASE, tamanhoApiKey: chaveApi.length, tamanhoSecretKey: chaveSecreta.length });
   const headers = { Accept: "application/vnd.api+json", "Content-Type": "application/json" };
 
   // Tenta buscar o prescritor já cadastrado (identificador = nosso uid, usado

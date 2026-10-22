@@ -12,3 +12,11 @@ export const cIndOpValido = (v) => /^\d{6}$/.test(String(v || ""));
 
 // Código que o sistema usa sozinho conforme o tipo de atendimento (mesma regra do servidor).
 export const cIndOpAutomatico = (tipo) => (tipo === "teleconsulta" ? "100301" : tipo === "domiciliar" ? "030104" : "030101");
+
+// Layout (1 = só ISS, 2 = ISS + IBS/CBS) com que a nota foi enviada: usa o campo
+// gravado na emissão e, nas notas antigas, lê a versão do próprio XML enviado.
+export function layoutDaNota(n) {
+  if (n?.layoutVersao) return Number(n.layoutVersao);
+  const m = String(n?.xmlEnviado || "").match(/<Cabecalho[^>]*Versao="(\d)"/);
+  return m ? Number(m[1]) : null;
+}

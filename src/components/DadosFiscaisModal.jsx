@@ -95,11 +95,16 @@ export default function DadosFiscaisModal({ open, onClose }) {
                 <span className="text-[11px] text-ink-500">04030 = Medicina e biomedicina (padrão). Só troque se sua clínica tiver um enquadramento diferente.</span>
               </label>
 
-              <label className="flex items-start gap-2.5 bg-amber-50 border border-amber-100 rounded-lg p-3 cursor-pointer">
-                <input type="checkbox" checked={valores.simplesNacional} onChange={(e) => setForm({ ...form, simplesNacional: e.target.checked })} className="mt-0.5 rounded focus-ring" />
-                <span className="text-xs text-amber-800">
-                  <span className="font-semibold block">Clínica optante pelo Simples Nacional</span>
-                  Empresas no Simples Nacional ainda usam o layout antigo (v1) da NFS-e — a Prefeitura rejeita o layout novo (Reforma Tributária/IBS-CBS) pra esse regime. Confirme isso com o contador da clínica se não tiver certeza.
+              <label className="block text-xs">
+                <span className="text-ink-500 font-medium">Regime tributário da clínica</span>
+                <select value={valores.simplesNacional ? "simples" : "normal"} onChange={(e) => setForm({ ...form, simplesNacional: e.target.value === "simples" })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring">
+                  <option value="normal">Lucro Presumido ou Lucro Real — nota nova com IBS/CBS (layout v2)</option>
+                  <option value="simples">Simples Nacional / MEI — nota só com ISS (layout v1)</option>
+                </select>
+                <span className={`block mt-1 text-[11px] rounded-lg p-2 ${valores.simplesNacional ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"}`}>
+                  {valores.simplesNacional
+                    ? "Atenção: neste regime a nota sai SEM a segunda página de IBS/CBS (a Prefeitura não aceita o layout novo para Simples Nacional). Se a clínica é Lucro Presumido ou Real, troque a opção acima."
+                    : "A nota é emitida no layout novo da Reforma Tributária: sai com a segunda página de IBS e CBS, obrigatória para Lucro Presumido e Lucro Real."}
                 </span>
               </label>
 
@@ -117,7 +122,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
 
               <div className="border-t border-black/5 pt-4">
                 <p className="text-xs font-semibold text-ink-700 mb-2">Reforma Tributária (IBS/CBS)</p>
-                <p className="text-[11px] text-ink-500 mb-2">Só se aplica se a clínica NÃO for Simples Nacional (veja acima).</p>
+                <p className="text-[11px] text-ink-500 mb-2">Só se aplica a Lucro Presumido/Real (veja o regime acima).</p>
                 <div className="grid grid-cols-2 gap-3">
                   <label className="block text-xs">
                     <span className="text-ink-500 font-medium">NBS</span>

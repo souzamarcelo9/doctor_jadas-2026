@@ -861,6 +861,7 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
     const status = sucessoMatch?.[1]?.toLowerCase() === "true" ? "autorizada" : sucessoMatch ? "rejeitada" : "processando";
     await notaRef.update({
       status,
+      layoutVersao: layoutVersao,
       xmlEnviado: mensagemXml,
       respostaWebservice: respostaXml, // já normalizado (desembrulhado + decodificado) — mais legível e confiável pra tudo que lê isso depois
       resumoResposta: resumo,

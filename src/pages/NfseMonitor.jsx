@@ -6,6 +6,7 @@ import { useFirestoreCollection, useFirestoreDoc } from "../lib/firestore";
 import { nfseEmitir, nfseRecalcularStatus, nfseCancelar } from "../lib/nfse";
 import { extrairErrosAmigaveis, extrairChaveNFe, normalizarRespostaNfse } from "../lib/nfseErros";
 import NfseDocumentoAcoes from "../components/NfseDocumentoAcoes";
+import { layoutDaNota } from "../lib/nfseCodigos";
 
 const statusTone = {
   autorizada: { label: "Autorizada", tone: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
@@ -117,6 +118,8 @@ function DetalheNota({ nota, clinicaId, clinica }) {
         tipoAtendimento: nota.tipoAtendimento || "presencial",
         nbs: clinica?.nbsPadrao,
         cClassTrib: clinica?.cClassTribPadrao,
+        cIndOp: nota.cIndOp || clinica?.cIndOpPadrao || "",
+        issRetido: nota.issRetido === true,
       });
       // Não precisa atualizar estado manualmente — o próprio documento no
       // Firestore muda (a Cloud Function sobrescreve status/XML/resumo), e
@@ -146,6 +149,7 @@ function DetalheNota({ nota, clinicaId, clinica }) {
           </div>
           <div className="flex items-center gap-2">
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${st.tone}`}>{st.label}</span>
+            {layoutDaNota(nota) && <span title="Layout com que a nota foi enviada" className={`text-xs font-semibold px-2.5 py-1 rounded-full ${layoutDaNota(nota) === 2 ? "bg-indigo-50 text-indigo-700" : "bg-amber-50 text-amber-700"}`}>{layoutDaNota(nota) === 2 ? "ISS + IBS/CBS" : "só ISS (v1) — sem 2ª página IBS/CBS"}</span>}
             {nota.status !== "autorizada" && nota.status !== "cancelada" && (
               <button onClick={reenviar} disabled={reenviando} className="flex items-center gap-1.5 text-xs font-semibold bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white px-3 py-1.5 rounded-lg focus-ring">
                 {reenviando ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />} Reenviar esta nota

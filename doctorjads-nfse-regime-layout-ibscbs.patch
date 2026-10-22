@@ -1,0 +1,126 @@
+diff --git a/functions/index.js b/functions/index.js
+index 4f9f0c8..db401db 100644
+--- a/functions/index.js
++++ b/functions/index.js
+@@ -861,6 +861,7 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
+     const status = sucessoMatch?.[1]?.toLowerCase() === "true" ? "autorizada" : sucessoMatch ? "rejeitada" : "processando";
+     await notaRef.update({
+       status,
++      layoutVersao: layoutVersao,
+       xmlEnviado: mensagemXml,
+       respostaWebservice: respostaXml, // já normalizado (desembrulhado + decodificado) — mais legível e confiável pra tudo que lê isso depois
+       resumoResposta: resumo,
+diff --git a/src/components/DadosFiscaisModal.jsx b/src/components/DadosFiscaisModal.jsx
+index a7e158a..085165d 100644
+--- a/src/components/DadosFiscaisModal.jsx
++++ b/src/components/DadosFiscaisModal.jsx
+@@ -95,11 +95,16 @@ export default function DadosFiscaisModal({ open, onClose }) {
+                 <span className="text-[11px] text-ink-500">04030 = Medicina e biomedicina (padrão). Só troque se sua clínica tiver um enquadramento diferente.</span>
+               </label>
+ 
+-              <label className="flex items-start gap-2.5 bg-amber-50 border border-amber-100 rounded-lg p-3 cursor-pointer">
+-                <input type="checkbox" checked={valores.simplesNacional} onChange={(e) => setForm({ ...form, simplesNacional: e.target.checked })} className="mt-0.5 rounded focus-ring" />
+-                <span className="text-xs text-amber-800">
+-                  <span className="font-semibold block">Clínica optante pelo Simples Nacional</span>
+-                  Empresas no Simples Nacional ainda usam o layout antigo (v1) da NFS-e — a Prefeitura rejeita o layout novo (Reforma Tributária/IBS-CBS) pra esse regime. Confirme isso com o contador da clínica se não tiver certeza.
++              <label className="block text-xs">
++                <span className="text-ink-500 font-medium">Regime tributário da clínica</span>
++                <select value={valores.simplesNacional ? "simples" : "normal"} onChange={(e) => setForm({ ...form, simplesNacional: e.target.value === "simples" })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring">
++                  <option value="normal">Lucro Presumido ou Lucro Real — nota nova com IBS/CBS (layout v2)</option>
++                  <option value="simples">Simples Nacional / MEI — nota só com ISS (layout v1)</option>
++                </select>
++                <span className={`block mt-1 text-[11px] rounded-lg p-2 ${valores.simplesNacional ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"}`}>
++                  {valores.simplesNacional
++                    ? "Atenção: neste regime a nota sai SEM a segunda página de IBS/CBS (a Prefeitura não aceita o layout novo para Simples Nacional). Se a clínica é Lucro Presumido ou Real, troque a opção acima."
++                    : "A nota é emitida no layout novo da Reforma Tributária: sai com a segunda página de IBS e CBS, obrigatória para Lucro Presumido e Lucro Real."}
+                 </span>
+               </label>
+ 
+@@ -117,7 +122,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
+ 
+               <div className="border-t border-black/5 pt-4">
+                 <p className="text-xs font-semibold text-ink-700 mb-2">Reforma Tributária (IBS/CBS)</p>
+-                <p className="text-[11px] text-ink-500 mb-2">Só se aplica se a clínica NÃO for Simples Nacional (veja acima).</p>
++                <p className="text-[11px] text-ink-500 mb-2">Só se aplica a Lucro Presumido/Real (veja o regime acima).</p>
+                 <div className="grid grid-cols-2 gap-3">
+                   <label className="block text-xs">
+                     <span className="text-ink-500 font-medium">NBS</span>
+diff --git a/src/lib/nfseCodigos.js b/src/lib/nfseCodigos.js
+index eaa94cf..40cec89 100644
+--- a/src/lib/nfseCodigos.js
++++ b/src/lib/nfseCodigos.js
+@@ -12,3 +12,11 @@ export const cIndOpValido = (v) => /^\d{6}$/.test(String(v || ""));
+ 
+ // Código que o sistema usa sozinho conforme o tipo de atendimento (mesma regra do servidor).
+ export const cIndOpAutomatico = (tipo) => (tipo === "teleconsulta" ? "100301" : tipo === "domiciliar" ? "030104" : "030101");
++
++// Layout (1 = só ISS, 2 = ISS + IBS/CBS) com que a nota foi enviada: usa o campo
++// gravado na emissão e, nas notas antigas, lê a versão do próprio XML enviado.
++export function layoutDaNota(n) {
++  if (n?.layoutVersao) return Number(n.layoutVersao);
++  const m = String(n?.xmlEnviado || "").match(/<Cabecalho[^>]*Versao="(\d)"/);
++  return m ? Number(m[1]) : null;
++}
+diff --git a/src/pages/NfseMonitor.jsx b/src/pages/NfseMonitor.jsx
+index 5fa74ee..ee83b27 100644
+--- a/src/pages/NfseMonitor.jsx
++++ b/src/pages/NfseMonitor.jsx
+@@ -6,6 +6,7 @@ import { useFirestoreCollection, useFirestoreDoc } from "../lib/firestore";
+ import { nfseEmitir, nfseRecalcularStatus, nfseCancelar } from "../lib/nfse";
+ import { extrairErrosAmigaveis, extrairChaveNFe, normalizarRespostaNfse } from "../lib/nfseErros";
+ import NfseDocumentoAcoes from "../components/NfseDocumentoAcoes";
++import { layoutDaNota } from "../lib/nfseCodigos";
+ 
+ const statusTone = {
+   autorizada: { label: "Autorizada", tone: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
+@@ -117,6 +118,8 @@ function DetalheNota({ nota, clinicaId, clinica }) {
+         tipoAtendimento: nota.tipoAtendimento || "presencial",
+         nbs: clinica?.nbsPadrao,
+         cClassTrib: clinica?.cClassTribPadrao,
++        cIndOp: nota.cIndOp || clinica?.cIndOpPadrao || "",
++        issRetido: nota.issRetido === true,
+       });
+       // Não precisa atualizar estado manualmente — o próprio documento no
+       // Firestore muda (a Cloud Function sobrescreve status/XML/resumo), e
+@@ -146,6 +149,7 @@ function DetalheNota({ nota, clinicaId, clinica }) {
+           </div>
+           <div className="flex items-center gap-2">
+             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${st.tone}`}>{st.label}</span>
++            {layoutDaNota(nota) && <span title="Layout com que a nota foi enviada" className={`text-xs font-semibold px-2.5 py-1 rounded-full ${layoutDaNota(nota) === 2 ? "bg-indigo-50 text-indigo-700" : "bg-amber-50 text-amber-700"}`}>{layoutDaNota(nota) === 2 ? "ISS + IBS/CBS" : "só ISS (v1) — sem 2ª página IBS/CBS"}</span>}
+             {nota.status !== "autorizada" && nota.status !== "cancelada" && (
+               <button onClick={reenviar} disabled={reenviando} className="flex items-center gap-1.5 text-xs font-semibold bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white px-3 py-1.5 rounded-lg focus-ring">
+                 {reenviando ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />} Reenviar esta nota
+diff --git a/src/pages/NotasFiscais.jsx b/src/pages/NotasFiscais.jsx
+index 331ab52..f4de9a7 100644
+--- a/src/pages/NotasFiscais.jsx
++++ b/src/pages/NotasFiscais.jsx
+@@ -8,7 +8,7 @@ import { useFirestoreDoc, useFirestoreCollection, criarDocumento, atualizarDocum
+ import { nfseEmitir } from "../lib/nfse";
+ import AutocompletePaciente from "../components/AutocompletePaciente";
+ import CampoCIndOp from "../components/CampoCIndOp";
+-import { cIndOpAutomatico, cIndOpValido } from "../lib/nfseCodigos";
++import { cIndOpAutomatico, cIndOpValido, layoutDaNota } from "../lib/nfseCodigos";
+ import { emailValido } from "../lib/masks";
+ 
+ const statusTone = {
+@@ -224,7 +224,9 @@ export default function NotasFiscais() {
+                 <p className="text-[11px] text-ink-500">Será enviado: <strong>{cIndOpEfetivo}</strong>. O padrão da clínica fica em Configurações → Dados Fiscais. Reforma Tributária (IBS/CBS): NBS e cClassTrib também vêm de Dados Fiscais (hoje {clinica?.nbsPadrao || "123012100"} / {clinica?.cClassTribPadrao || "200029"}).</p>
+               </div>
+             ) : (
+-              <p className="text-[11px] text-ink-500">Clínica no Simples Nacional: a nota usa o layout v1 (só ISS), que não leva cIndOp, NBS nem IBS/CBS.</p>
++              <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-lg p-2.5">
++                <strong>Layout v1 (só ISS):</strong> a clínica está configurada como Simples Nacional/MEI, então a nota sai <strong>sem a 2ª página de IBS/CBS</strong> (e sem cIndOp/NBS). Se a clínica é Lucro Presumido ou Lucro Real, corrija em Configurações → Dados Fiscais → Regime tributário.
++              </div>
+             )}
+             <label className="block text-xs">
+               <span className="text-ink-500 font-medium">Discriminação dos serviços</span>
+@@ -276,7 +278,8 @@ export default function NotasFiscais() {
+                         <Td>{n.tomador}</Td>
+                         <Td>{(n.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</Td>
+                         <Td>{n.criadoEm?.toDate ? n.criadoEm.toDate().toLocaleDateString("pt-BR") : "—"}</Td>
+-                        <Td><span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${S.tone}`}><S.icon size={11} /> {S.label}</span></Td>
++                        <Td><span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${S.tone}`}><S.icon size={11} /> {S.label}</span>
++                          {layoutDaNota(n) && <span title={layoutDaNota(n) === 2 ? "Enviada no layout novo: ISS + IBS/CBS (com a 2ª página)" : "Enviada no layout v1: só ISS, sem a página de IBS/CBS"} className={`ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${layoutDaNota(n) === 2 ? "bg-indigo-50 text-indigo-700" : "bg-amber-50 text-amber-700"}`}>{layoutDaNota(n) === 2 ? "ISS + IBS/CBS" : "só ISS (v1)"}</span>}</Td>
+                         <Td>
+                           {n.status === "autorizada" ? (
+                             <button onClick={() => setNotaAberta(notaAberta === n.id ? null : n.id)} className="flex items-center gap-1 text-[11px] font-semibold text-brand-600 hover:text-brand-700">

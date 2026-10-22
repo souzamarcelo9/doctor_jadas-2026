@@ -8,7 +8,7 @@ import { useFirestoreDoc, useFirestoreCollection, criarDocumento, atualizarDocum
 import { nfseEmitir } from "../lib/nfse";
 import AutocompletePaciente from "../components/AutocompletePaciente";
 import CampoCIndOp from "../components/CampoCIndOp";
-import { cIndOpAutomatico, cIndOpValido } from "../lib/nfseCodigos";
+import { cIndOpAutomatico, cIndOpValido, layoutDaNota } from "../lib/nfseCodigos";
 import { emailValido } from "../lib/masks";
 
 const statusTone = {
@@ -223,7 +223,9 @@ export default function NotasFiscais() {
                 <p className="text-[11px] text-ink-500">Será enviado: <strong>{cIndOpEfetivo}</strong>. O padrão da clínica fica em Configurações → Dados Fiscais. Reforma Tributária (IBS/CBS): NBS e cClassTrib também vêm de Dados Fiscais (hoje {clinica?.nbsPadrao || "123012100"} / {clinica?.cClassTribPadrao || "200029"}).</p>
               </div>
             ) : (
-              <p className="text-[11px] text-ink-500">Clínica no Simples Nacional: a nota usa o layout v1 (só ISS), que não leva cIndOp, NBS nem IBS/CBS.</p>
+              <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-lg p-2.5">
+                <strong>Layout v1 (só ISS):</strong> a clínica está configurada como Simples Nacional/MEI, então a nota sai <strong>sem a 2ª página de IBS/CBS</strong> (e sem cIndOp/NBS). Se a clínica é Lucro Presumido ou Lucro Real, corrija em Configurações → Dados Fiscais → Regime tributário.
+              </div>
             )}
             <label className="block text-xs">
               <span className="text-ink-500 font-medium">Discriminação dos serviços</span>
@@ -275,7 +277,8 @@ export default function NotasFiscais() {
                         <Td>{n.tomador}</Td>
                         <Td>{(n.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</Td>
                         <Td>{n.criadoEm?.toDate ? n.criadoEm.toDate().toLocaleDateString("pt-BR") : "—"}</Td>
-                        <Td><span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${S.tone}`}><S.icon size={11} /> {S.label}</span></Td>
+                        <Td><span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${S.tone}`}><S.icon size={11} /> {S.label}</span>
+                          {layoutDaNota(n) && <span title={layoutDaNota(n) === 2 ? "Enviada no layout novo: ISS + IBS/CBS (com a 2ª página)" : "Enviada no layout v1: só ISS, sem a página de IBS/CBS"} className={`ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${layoutDaNota(n) === 2 ? "bg-indigo-50 text-indigo-700" : "bg-amber-50 text-amber-700"}`}>{layoutDaNota(n) === 2 ? "ISS + IBS/CBS" : "só ISS (v1)"}</span>}</Td>
                         <Td>
                           {n.status === "autorizada" ? (
                             <button onClick={() => setNotaAberta(notaAberta === n.id ? null : n.id)} className="flex items-center gap-1 text-[11px] font-semibold text-brand-600 hover:text-brand-700">

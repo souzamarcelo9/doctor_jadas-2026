@@ -3,6 +3,7 @@ import { Pill, ExternalLink, Send, CheckCircle2, Loader2, AlertTriangle, X } fro
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreCollection, useFirestoreDoc, criarDocumento, atualizarDocumento, mensagemErroAmigavel } from "../../lib/firestore";
 import { memedObterToken } from "../../lib/memed";
+import { maskCPF, cpfValido } from "../../lib/masks";
 
 // Ambiente de testes/sandbox da Memed por padrão. Em produção, defina
 // VITE_MEMED_SCRIPT_URL=https://partners.memed.com.br/integration.js no .env
@@ -20,7 +21,15 @@ export default function Prescricoes() {
   const [status, setStatus] = useState("idle"); // idle | carregando | completar_cadastro | abrindo_modulo | modulo_aberto | erro
   const [erro, setErro] = useState("");
   const [camposFaltando, setCamposFaltando] = useState([]);
-  const [form, setForm] = useState({ sobrenome: "", cpf: "", dataNascimento: "", boardNumber: "", boardState: "SP" });
+  const { data: membro } = useFirestoreDoc(clinicaId ? `clinicas/${clinicaId}/membros` : null, profissionalId);
+  // O formulário parte do que já está salvo no cadastro do médico; o que ele digitar sobrepõe.
+  const [edicoes, setEdicoes] = useState({});
+  const base = {
+    sobrenome: membro?.sobrenome || "", cpf: membro?.cpf ? maskCPF(String(membro.cpf)) : "", dataNascimento: membro?.dataNascimento || "",
+    boardNumber: membro?.boardNumber || "", boardState: membro?.boardState || "SP",
+  };
+  const form = { ...base, ...edicoes };
+  const setForm = (novo) => setEdicoes(novo);
   const [salvandoForm, setSalvandoForm] = useState(false);
 
   const scriptRef = useRef(null);
@@ -45,6 +54,10 @@ export default function Prescricoes() {
       if (err.code === "functions/failed-precondition") {
         setCamposFaltando(err.details?.camposFaltando || []);
         setStatus("completar_cadastro");
+      } else if (err.code === "functions/invalid-argument") {
+        // A Memed recusou os dados do cadastro: reabre o formulário (preenchido) pra corrigir.
+        setErro(err.message);
+        setStatus("completar_cadastro");
       } else {
         console.error("Erro ao obter token da Memed:", err);
         setErro(err.message || "Não foi possível iniciar a receita digital.");
@@ -54,8 +67,10 @@ export default function Prescricoes() {
   }
 
   async function salvarCadastroEContinuar() {
-    setSalvandoForm(true);
     setErro("");
+    if (!cpfValido(form.cpf)) { setErro("CPF inválido — confira os dígitos."); return; }
+    if (!/^(0[1-9]|[12]\d|3[01])\/(0[1-9]|1[0-2])\/(19|20)\d{2}$/.test(form.dataNascimento)) { setErro("Data de nascimento inválida — use dd/mm/aaaa."); return; }
+    setSalvandoForm(true);
     try {
       await atualizarDocumento(`clinicas/${clinicaId}/membros`, profissionalId, {
         sobrenome: form.sobrenome,
@@ -214,8 +229,8 @@ export default function Prescricoes() {
           </div>
           <div className="grid sm:grid-cols-2 gap-3">
             <Field label="Sobrenome" value={form.sobrenome} onChange={(v) => setForm({ ...form, sobrenome: v })} />
-            <Field label="CPF" value={form.cpf} onChange={(v) => setForm({ ...form, cpf: v })} placeholder="Somente números" />
-            <Field label="Data de nascimento" value={form.dataNascimento} onChange={(v) => setForm({ ...form, dataNascimento: v })} placeholder="dd/mm/aaaa" />
+            <Field label="CPF" value={form.cpf} onChange={(v) => setForm({ ...form, cpf: maskCPF(v) })} placeholder="000.000.000-00" />
+            <Field label="Data de nascimento" value={form.dataNascimento} onChange={(v) => setForm({ ...form, dataNascimento: v.replace(/[^\d/]/g, "").slice(0, 10) })} placeholder="dd/mm/aaaa" />
             <Field label="Número do CRM" value={form.boardNumber} onChange={(v) => setForm({ ...form, boardNumber: v })} />
             <label className="block text-xs">
               <span className="text-ink-500 font-medium">UF do CRM</span>

@@ -336,7 +336,23 @@ exports.memedObterToken = onCall({ region: REGION, secrets: [memedApiKey, memedS
   if (!resp.ok) {
     const errText = await resp.text().catch(() => "");
     logger.error("Memed respondeu com erro:", resp.status, errText);
-    throw new HttpsError("internal", "Falha ao autenticar/cadastrar na Memed. Confira os dados do cadastro (CPF, registro profissional).");
+    // Extrai a mensagem da Memed (JSON:API: errors[].detail/title) pra mostrar
+    // a causa real na tela em vez de um erro genérico.
+    let detalhe = "";
+    try {
+      const j = JSON.parse(errText);
+      const lista = Array.isArray(j?.errors) ? j.errors : [];
+      detalhe = lista.map((e) => e.detail || e.title || e.message).filter(Boolean).join("; ") || j?.message || "";
+    } catch { detalhe = ""; }
+    detalhe = String(detalhe || "").slice(0, 300);
+    const sufixo = detalhe ? ` Detalhe da Memed: ${detalhe}` : "";
+    if (resp.status === 401 || resp.status === 403) {
+      throw new HttpsError("permission-denied", `A Memed recusou as chaves de acesso do sistema (HTTP ${resp.status}). Confira MEMED_API_KEY/MEMED_SECRET_KEY e se são do mesmo ambiente (produção ou homologação) da URL da API.${sufixo}`, { memedStatus: resp.status });
+    }
+    if (resp.status >= 400 && resp.status < 500) {
+      throw new HttpsError("invalid-argument", `A Memed não aceitou o cadastro do médico (HTTP ${resp.status}). Confira CPF, data de nascimento, CRM e UF — precisam ser dados reais e válidos.${sufixo}`, { memedStatus: resp.status });
+    }
+    throw new HttpsError("unavailable", `A Memed está indisponível no momento (HTTP ${resp.status}). Tente novamente em instantes.${sufixo}`, { memedStatus: resp.status });
   }
 
   const data = await resp.json();

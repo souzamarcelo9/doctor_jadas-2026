@@ -8,7 +8,7 @@ export default function EditarUsuarioModal({ open, onClose }) {
   const { clinicaId, profissionalId } = useTenant();
   const { data: membro, loading } = useFirestoreDoc(open && clinicaId ? `clinicas/${clinicaId}/membros` : null, profissionalId);
 
-  const [form, setForm] = useState({ nome: "", especialidade: "", celular: "" });
+  const [form, setForm] = useState({ nome: "", especialidade: "", celular: "", boardNumber: "", boardState: "" });
   const [fotoFile, setFotoFile] = useState(null);
   const [fotoPreview, setFotoPreview] = useState("");
   const [salvando, setSalvando] = useState(false);
@@ -17,7 +17,7 @@ export default function EditarUsuarioModal({ open, onClose }) {
 
   useEffect(() => {
     if (membro) {
-      setForm({ nome: membro.nome || "", especialidade: membro.especialidade || "", celular: membro.celular || "" });
+      setForm({ nome: membro.nome || "", especialidade: membro.especialidade || "", celular: membro.celular || "", boardNumber: membro.boardNumber || "", boardState: membro.boardState || "" });
       setFotoPreview(membro.fotoUrl || "");
     }
   }, [membro]);
@@ -35,7 +35,8 @@ export default function EditarUsuarioModal({ open, onClose }) {
     setErro(""); setSucesso(false);
     setSalvando(true);
     try {
-      const dados = { ...form };
+      const dados = { ...form, boardCode: "CRM", boardNumber: String(form.boardNumber).replace(/\D/g, ""), boardState: String(form.boardState).toUpperCase().slice(0, 2) };
+      if (dados.boardNumber && dados.boardState.length !== 2) { setErro("Informe a UF do CRM (2 letras)."); setSalvando(false); return; }
       if (fotoFile) {
         dados.fotoUrl = await enviarFotoProfissional(clinicaId, profissionalId, fotoFile);
       }
@@ -83,6 +84,17 @@ export default function EditarUsuarioModal({ open, onClose }) {
               <span className="text-ink-500 font-medium">Especialidade</span>
               <input value={form.especialidade} onChange={(e) => setForm({ ...form, especialidade: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
             </label>
+            <div className="grid grid-cols-3 gap-2">
+              <label className="block text-xs col-span-2">
+                <span className="text-ink-500 font-medium">Número do CRM</span>
+                <input value={form.boardNumber} onChange={(e) => setForm({ ...form, boardNumber: e.target.value.replace(/\D/g, "").slice(0, 10) })} inputMode="numeric" placeholder="Só números" className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
+              </label>
+              <label className="block text-xs">
+                <span className="text-ink-500 font-medium">UF</span>
+                <input value={form.boardState} onChange={(e) => setForm({ ...form, boardState: e.target.value.replace(/[^a-zA-Z]/g, "").toUpperCase().slice(0, 2) })} placeholder="SP" className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
+              </label>
+            </div>
+            <p className="text-[11px] text-ink-500 -mt-2">Sai no rodapé de encaminhamentos, atestados e pedidos de exame (e é reaproveitado pela receita digital).</p>
             <label className="block text-xs">
               <span className="text-ink-500 font-medium">Celular</span>
               <input value={form.celular} onChange={(e) => setForm({ ...form, celular: e.target.value })} placeholder="(00) 00000-0000" className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />

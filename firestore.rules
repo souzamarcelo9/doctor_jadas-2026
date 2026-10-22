@@ -37,7 +37,7 @@ service cloud.firestore {
 
     // Módulos do prontuário que só médico pode criar/editar (secretaria só lê)
     function moduloRestritoAMedico(modulo) {
-      return modulo == "condutas" || modulo == "prescricoes" || modulo == "encaminhamentos";
+      return modulo == "condutas" || modulo == "prescricoes" || modulo == "encaminhamentos" || modulo == "atestados";
     }
 
     // ---------- /usuarios ----------

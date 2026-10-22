@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState } from "react";
-import { Search, ArrowUpDown, Upload, FileText, LineChart as LineChartIcon, Plus, Loader2, X, Paperclip, ExternalLink, Trash2, AlertTriangle, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { FileDown, Search, ArrowUpDown, Upload, FileText, LineChart as LineChartIcon, Plus, Loader2, X, Paperclip, ExternalLink, Trash2, AlertTriangle, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { storage } from "../../firebase";
 import { examFavorites } from "../../data/mockData";
+import { emitirDocumentoPdf } from "../../lib/documentosPdf";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreCollection, criarDocumento, alternarAtivo, atualizarDocumento } from "../../lib/firestore";
 
@@ -37,6 +38,28 @@ export default function HistExames() {
 
   const detalhe = todos.find((r) => r.id === detalheId) || null;
   const evolucao = todos.find((r) => r.id === evolucaoId) || null;
+
+  const pendentes = todos.filter((r) => r.ativo !== false && !r.resultado && !r.realizado);
+  const [gerandoPdf, setGerandoPdf] = useState(false);
+  async function gerarPedido() {
+    if (!pendentes.length) return;
+    setGerandoPdf(true);
+    setErro("");
+    try {
+      const itens = [...pendentes].reverse().map((r, i) => `${i + 1}. ${r.exame}${(r.qtd || 1) > 1 ? `  (${r.qtd}x)` : ""}`);
+      const res = await emitirDocumentoPdf({
+        clinicaId, pacienteId, profissionalId,
+        titulo: "Solicitação de exames", codigo: `EX${Date.now().toString(36).toUpperCase().slice(-6)}`,
+        secoes: [{ titulo: "Solicito a realização dos seguintes exames", itens }],
+      });
+      if (res.medicoSemCrm) setErro("O PDF foi gerado, mas o CRM do médico não está cadastrado — preencha em Configurações → Editar Usuário.");
+    } catch (err) {
+      console.error("Erro ao gerar pedido de exames:", err);
+      setErro("Não foi possível gerar o PDF. Tente novamente.");
+    } finally {
+      setGerandoPdf(false);
+    }
+  }
 
   async function solicitar(nomeExame) {
     const nome = nomeExame || novoExame;
@@ -116,6 +139,9 @@ export default function HistExames() {
           <input type="checkbox" checked={mostrarInativos} onChange={(e) => setMostrarInativos(e.target.checked)} className="rounded accent-brand-600" /> Exibir inativos
         </label>
         <div className="flex-1" />
+        <button onClick={gerarPedido} disabled={gerandoPdf || !pendentes.length} title={pendentes.length ? "PDF com os exames ainda sem resultado" : "Nenhum exame pendente (sem resultado) para solicitar"} className="flex items-center gap-1.5 text-xs font-semibold text-brand-700 bg-brand-50 hover:bg-brand-100 disabled:opacity-50 px-3 py-1.5 rounded-lg focus-ring">
+          {gerandoPdf ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />} Pedido de exames (PDF){pendentes.length ? ` · ${pendentes.length}` : ""}
+        </button>
         <select value="" onChange={(e) => e.target.value && solicitar(e.target.value)} disabled={salvando} className="text-xs border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring max-w-[200px]">
           <option value="">Favoritos...</option>
           {examFavorites.map((c) => <option key={c} value={c}>{c}</option>)}

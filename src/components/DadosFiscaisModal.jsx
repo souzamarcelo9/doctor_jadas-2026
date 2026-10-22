@@ -32,6 +32,10 @@ export default function DadosFiscaisModal({ open, onClose }) {
     nbsPadrao: form.nbsPadrao ?? clinica?.nbsPadrao ?? "123012100",
     cClassTribPadrao: form.cClassTribPadrao ?? clinica?.cClassTribPadrao ?? "200029",
     cIndOpPadrao: form.cIndOpPadrao ?? clinica?.cIndOpPadrao ?? "",
+    enderecoDocumento: form.enderecoDocumento ?? clinica?.enderecoDocumento ?? "",
+    telefoneDocumento: form.telefoneDocumento ?? clinica?.telefoneDocumento ?? "",
+    emailDocumento: form.emailDocumento ?? clinica?.emailDocumento ?? "",
+    cidadeDocumento: form.cidadeDocumento ?? clinica?.cidadeDocumento ?? "São Paulo",
     simplesNacional: form.simplesNacional ?? clinica?.simplesNacional ?? false,
   };
 
@@ -51,6 +55,10 @@ export default function DadosFiscaisModal({ open, onClose }) {
         nbsPadrao: valores.nbsPadrao.trim(),
         cClassTribPadrao: valores.cClassTribPadrao.trim(),
         cIndOpPadrao: valores.cIndOpPadrao || "",
+        enderecoDocumento: valores.enderecoDocumento.trim(),
+        telefoneDocumento: valores.telefoneDocumento.trim(),
+        emailDocumento: valores.emailDocumento.trim(),
+        cidadeDocumento: valores.cidadeDocumento.trim() || "São Paulo",
         simplesNacional: valores.simplesNacional,
       });
       setSucesso(true);
@@ -139,6 +147,19 @@ export default function DadosFiscaisModal({ open, onClose }) {
                   <span className="text-[11px] text-ink-500 block mt-1">No "Automático", o sistema escolhe sozinho: presencial → 030101, domiciliar → 030104, teleconsulta → 100301. Defina um código aqui só se o contador orientar um enquadramento fixo; ele ainda pode ser ajustado nota a nota na emissão.</span>
                 </div>
                 <p className="text-[11px] text-ink-500 mt-1.5">Padrão: 123012100 (clínica médica geral) / 200029 (serviços de saúde humana). Troque só se a especialidade tiver código próprio no Anexo III da LC 214/2025 (ex: cirúrgico, psiquiátrico, obstétrico).</p>
+              </div>
+
+              <div className="border-t border-black/5 pt-4">
+                <p className="text-xs font-semibold text-ink-700 mb-2">Cabeçalho dos documentos clínicos</p>
+                <p className="text-[11px] text-ink-500 mb-2">Aparece no topo dos PDFs de encaminhamento, atestado e pedido de exames (nome e CNPJ vêm do cadastro da clínica).</p>
+                <div className="space-y-2">
+                  {[["enderecoDocumento", "Endereço", "Al. Jaú, 1742, conj. 162 — Jardim Paulista — CEP 01420-904"], ["telefoneDocumento", "Telefone", "(11) 0000-0000"], ["emailDocumento", "E-mail", "contato@clinica.com.br"], ["cidadeDocumento", "Cidade (para a data do documento)", "São Paulo"]].map(([campo, rotulo, ph]) => (
+                    <label key={campo} className="block text-xs">
+                      <span className="text-ink-500 font-medium">{rotulo}</span>
+                      <input value={valores[campo]} onChange={(e) => setForm({ ...form, [campo]: e.target.value })} placeholder={ph} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring" />
+                    </label>
+                  ))}
+                </div>
               </div>
 
               {erro && <div className="flex items-start gap-2 text-xs bg-rose-50 text-rose-700 border border-rose-100 rounded-lg p-3"><AlertTriangle size={13} className="mt-0.5 shrink-0" /> {erro}</div>}

@@ -1,15 +1,39 @@
 import { useState } from "react";
-import { Send, ArrowRight, Loader2, AlertTriangle } from "lucide-react";
+import { Send, ArrowRight, Loader2, AlertTriangle, FileDown } from "lucide-react";
+import { emitirDocumentoPdf } from "../../lib/documentosPdf";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreCollection, criarDocumento, mensagemErroAmigavel } from "../../lib/firestore";
 
 export default function Encaminhamento() {
-  const { pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
+  const { clinicaId, pacienteId, pacientePath, atendimentoId, profissionalId, firebaseConfigured } = useTenant();
   const { data: rows, loading } = useFirestoreCollection(`${pacientePath}/encaminhamentos`);
   const [especialidade, setEspecialidade] = useState("");
   const [motivo, setMotivo] = useState("");
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
+  const [gerandoId, setGerandoId] = useState(null);
+
+  async function gerarPdf(r) {
+    setGerandoId(r.id);
+    setErro("");
+    try {
+      const res = await emitirDocumentoPdf({
+        clinicaId, pacienteId, profissionalId: r.profissionalId || profissionalId,
+        titulo: "Encaminhamento médico", codigo: r.id.slice(0, 8).toUpperCase(),
+        data: r.criadoEm?.toDate?.(),
+        secoes: [
+          { texto: `Encaminho o(a) paciente acima identificado(a) para avaliação e conduta em ${r.especialidade}.` },
+          ...(r.motivo ? [{ titulo: "Motivo do encaminhamento", texto: r.motivo }] : []),
+        ],
+      });
+      if (res.medicoSemCrm) setErro("O PDF foi gerado, mas o CRM do médico não está cadastrado — preencha em Configurações → Editar Usuário.");
+    } catch (err) {
+      console.error("Erro ao gerar PDF do encaminhamento:", err);
+      setErro("Não foi possível gerar o PDF. Tente novamente.");
+    } finally {
+      setGerandoId(null);
+    }
+  }
 
   async function encaminhar() {
     if (!especialidade.trim() || !firebaseConfigured) return;
@@ -59,18 +83,23 @@ export default function Encaminhamento() {
         <table className="w-full text-xs">
           <thead>
             <tr className="text-left text-ink-500 border-b border-black/5">
-              <Th>Data</Th><Th>Especialidade</Th><Th>Motivo</Th><Th>Status</Th>
+              <Th>Data</Th><Th>Especialidade</Th><Th>Motivo</Th><Th>Status</Th><Th>Documento</Th>
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={4} className="text-center py-6 text-ink-500"><Loader2 size={16} className="animate-spin inline" /> Carregando…</td></tr>}
-            {!loading && rows.length === 0 && <tr><td colSpan={4} className="text-center py-6 text-ink-500">Nenhum encaminhamento ainda.</td></tr>}
+            {loading && <tr><td colSpan={5} className="text-center py-6 text-ink-500"><Loader2 size={16} className="animate-spin inline" /> Carregando…</td></tr>}
+            {!loading && rows.length === 0 && <tr><td colSpan={5} className="text-center py-6 text-ink-500">Nenhum encaminhamento ainda.</td></tr>}
             {rows.map((r) => (
               <tr key={r.id} className="border-b border-black/5 last:border-0">
                 <Td className="whitespace-nowrap">{formatarData(r.criadoEm)}</Td>
                 <Td className="font-medium text-ink-900">{r.especialidade}</Td>
                 <Td>{r.motivo}</Td>
                 <Td><span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">{r.status}</span></Td>
+                <Td>
+                  <button onClick={() => gerarPdf(r)} disabled={gerandoId === r.id} title="Gerar PDF para imprimir/assinar" className="flex items-center gap-1 text-[11px] font-semibold text-brand-700 bg-brand-50 hover:bg-brand-100 disabled:opacity-60 px-2.5 py-1 rounded-md focus-ring">
+                    {gerandoId === r.id ? <Loader2 size={12} className="animate-spin" /> : <FileDown size={12} />} PDF
+                  </button>
+                </Td>
               </tr>
             ))}
           </tbody>

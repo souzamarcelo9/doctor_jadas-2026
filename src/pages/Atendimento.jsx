@@ -15,6 +15,7 @@ import Imagens from "../components/atendimento/Imagens";
 import Conduta from "../components/atendimento/Conduta";
 import Prescricoes from "../components/atendimento/Prescricoes";
 import Encaminhamento from "../components/atendimento/Encaminhamento";
+import Atestado from "../components/atendimento/Atestado";
 import Formularios from "../components/atendimento/Formularios";
 import Antropometria from "../components/atendimento/Antropometria";
 import Vacinas from "../components/atendimento/Vacinas";
@@ -29,7 +30,7 @@ import { Trash2, CheckCircle2, Loader2, Star } from "lucide-react";
 const tabs = [
   "Queixa Paciente", "Histórico", "Exame físico", "Doenças Pré-existentes / Vícios", "Alergias",
   "Hist. Exames", "Sinais Vitais", "Medidas", "Vacinas", "Imagens", "Formulários", "Encaminhamento",
-  "Conduta", "Prescrições",
+  "Conduta", "Prescrições", "Atestado",
 ];
 
 export default function Atendimento() {
@@ -110,6 +111,7 @@ export default function Atendimento() {
       case "Conduta": return <Conduta />;
       case "Prescrições": return <Prescricoes />;
       case "Encaminhamento": return <Encaminhamento />;
+      case "Atestado": return <Atestado />;
       case "Formulários": return <Formularios />;
       default: return null;
     }

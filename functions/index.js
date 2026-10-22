@@ -256,6 +256,28 @@ const MEMED_API_BASE = "https://api.memed.com.br";
  */
 const MEMED_CAMPOS_OBRIGATORIOS = ["sobrenome", "cpf", "dataNascimento", "boardNumber", "boardState"];
 
+/** Converte a data de nascimento guardada no cadastro para DD/MM/AAAA (o único
+ * formato que a Memed aceita em produção). Aceita dd/mm/aaaa (com espaços ou
+ * outros separadores), aaaa-mm-dd, ddmmaaaa e Timestamp do Firestore.
+ * Devolve null se não for uma data real. */
+function normalizarDataBR(valor) {
+  let d, m, a;
+  if (valor && typeof valor.toDate === "function") {
+    const dt = valor.toDate();
+    d = dt.getUTCDate(); m = dt.getUTCMonth() + 1; a = dt.getUTCFullYear();
+  } else {
+    const txt = String(valor || "").trim();
+    let achou = txt.match(/^(\d{4})\D(\d{1,2})\D(\d{1,2})/); // aaaa-mm-dd
+    if (achou) { a = +achou[1]; m = +achou[2]; d = +achou[3]; }
+    else if ((achou = txt.match(/^(\d{1,2})\D(\d{1,2})\D(\d{4})/))) { d = +achou[1]; m = +achou[2]; a = +achou[3]; }
+    else if ((achou = txt.replace(/\D/g, "").match(/^(\d{2})(\d{2})(\d{4})$/))) { d = +achou[1]; m = +achou[2]; a = +achou[3]; }
+    else return null;
+  }
+  const teste = new Date(Date.UTC(a, m - 1, d));
+  if (teste.getUTCFullYear() !== a || teste.getUTCMonth() !== m - 1 || teste.getUTCDate() !== d || a < 1900 || a > new Date().getFullYear()) return null;
+  return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${a}`;
+}
+
 exports.memedObterToken = onCall({ region: REGION, secrets: [memedApiKey, memedSecretKey] }, async (request) => {
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "Faça login para usar a prescrição digital.");
@@ -280,6 +302,12 @@ exports.memedObterToken = onCall({ region: REGION, secrets: [memedApiKey, memedS
   const faltando = MEMED_CAMPOS_OBRIGATORIOS.filter((campo) => !membro[campo]);
   if (faltando.length > 0) {
     throw new HttpsError("failed-precondition", "Cadastro incompleto para prescrever.", { camposFaltando: faltando });
+  }
+
+  const dataNascimentoBR = normalizarDataBR(membro.dataNascimento);
+  if (!dataNascimentoBR) {
+    logger.warn("Memed: data de nascimento inválida no cadastro.", { formato: String(membro.dataNascimento ?? "").replace(/\d/g, "d") });
+    throw new HttpsError("failed-precondition", "Data de nascimento inválida no cadastro do médico — corrija no formulário (dd/mm/aaaa).", { camposFaltando: ["dataNascimento"] });
   }
 
   // A chave do parceiro vai na query string (confirmado pela doc oficial —
@@ -325,7 +353,7 @@ exports.memedObterToken = onCall({ region: REGION, secrets: [memedApiKey, memedS
           email: membro.email || undefined,
           telefone: membro.telefone ? String(membro.telefone).replace(/\D/g, "") : undefined,
           sexo: membro.sexo || undefined,
-          data_nascimento: membro.dataNascimento, // formato dd/mm/aaaa
+          data_nascimento: dataNascimentoBR, // formato DD/MM/AAAA (normalizado acima)
         },
       },
     };

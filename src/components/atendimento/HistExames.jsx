@@ -1,10 +1,11 @@
 import { useMemo, useRef, useState } from "react";
-import { FileDown, Search, ArrowUpDown, Upload, FileText, LineChart as LineChartIcon, Plus, Loader2, X, Paperclip, ExternalLink, Trash2, AlertTriangle, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Send, FileDown, Search, ArrowUpDown, Upload, FileText, LineChart as LineChartIcon, Plus, Loader2, X, Paperclip, ExternalLink, Trash2, AlertTriangle, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { storage } from "../../firebase";
 import { examFavorites } from "../../data/mockData";
 import { emitirDocumentoPdf } from "../../lib/documentosPdf";
+import EnviarDocumentoModal from "../EnviarDocumentoModal";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreCollection, criarDocumento, alternarAtivo, atualizarDocumento } from "../../lib/firestore";
 
@@ -41,17 +42,18 @@ export default function HistExames() {
 
   const pendentes = todos.filter((r) => r.ativo !== false && !r.resultado && !r.realizado);
   const [gerandoPdf, setGerandoPdf] = useState(false);
+  const [envio, setEnvio] = useState(null);
+  const paramsPedido = () => ({
+    clinicaId, pacienteId, profissionalId,
+    titulo: "Solicitação de exames", codigo: `EX${Date.now().toString(36).toUpperCase().slice(-6)}`,
+    secoes: [{ titulo: "Solicito a realização dos seguintes exames", itens: [...pendentes].reverse().map((r, i) => `${i + 1}. ${r.exame}${(r.qtd || 1) > 1 ? `  (${r.qtd}x)` : ""}`) }],
+  });
   async function gerarPedido() {
     if (!pendentes.length) return;
     setGerandoPdf(true);
     setErro("");
     try {
-      const itens = [...pendentes].reverse().map((r, i) => `${i + 1}. ${r.exame}${(r.qtd || 1) > 1 ? `  (${r.qtd}x)` : ""}`);
-      const res = await emitirDocumentoPdf({
-        clinicaId, pacienteId, profissionalId,
-        titulo: "Solicitação de exames", codigo: `EX${Date.now().toString(36).toUpperCase().slice(-6)}`,
-        secoes: [{ titulo: "Solicito a realização dos seguintes exames", itens }],
-      });
+      const res = await emitirDocumentoPdf(paramsPedido());
       if (res.medicoSemCrm) setErro("O PDF foi gerado, mas o CRM do médico não está cadastrado — preencha em Configurações → Editar Usuário.");
     } catch (err) {
       console.error("Erro ao gerar pedido de exames:", err);
@@ -141,6 +143,9 @@ export default function HistExames() {
         <div className="flex-1" />
         <button onClick={gerarPedido} disabled={gerandoPdf || !pendentes.length} title={pendentes.length ? "PDF com os exames ainda sem resultado" : "Nenhum exame pendente (sem resultado) para solicitar"} className="flex items-center gap-1.5 text-xs font-semibold text-brand-700 bg-brand-50 hover:bg-brand-100 disabled:opacity-50 px-3 py-1.5 rounded-lg focus-ring">
           {gerandoPdf ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />} Pedido de exames (PDF){pendentes.length ? ` · ${pendentes.length}` : ""}
+        </button>
+        <button onClick={() => setEnvio(paramsPedido())} disabled={!pendentes.length} title="Enviar o pedido de exames ao paciente" className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 px-3 py-1.5 rounded-lg focus-ring">
+          <Send size={13} /> Enviar ao paciente
         </button>
         <select value="" onChange={(e) => e.target.value && solicitar(e.target.value)} disabled={salvando} className="text-xs border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring max-w-[200px]">
           <option value="">Favoritos...</option>
@@ -236,6 +241,7 @@ export default function HistExames() {
         </table>
       </div>
 
+      {envio && <EnviarDocumentoModal params={envio} onClose={() => setEnvio(null)} />}
       {detalhe && <DetalheModal r={detalhe} onClose={() => setDetalheId(null)} onAnexar={() => escolherArquivo(detalhe.id)} onRemover={() => removerLaudo(detalhe)} enviando={enviandoId === detalhe.id} />}
       {evolucao && <EvolucaoModal r={evolucao} todos={todos} onClose={() => setEvolucaoId(null)} />}
     </div>

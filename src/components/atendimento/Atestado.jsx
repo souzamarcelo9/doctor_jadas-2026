@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { FileCheck2, Loader2, AlertTriangle, FileDown } from "lucide-react";
+import { FileCheck2, Loader2, AlertTriangle, FileDown, Send } from "lucide-react";
+import EnviarDocumentoModal from "../EnviarDocumentoModal";
 import { useTenant } from "../../context/TenantContext";
 import { useFirestoreCollection, useFirestoreDoc, criarDocumento, mensagemErroAmigavel } from "../../lib/firestore";
 import { emitirDocumentoPdf } from "../../lib/documentosPdf";
@@ -29,6 +30,7 @@ export default function Atestado() {
   const [textoEditado, setTextoEditado] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [gerandoId, setGerandoId] = useState(null);
+  const [envio, setEnvio] = useState(null);
   const [erro, setErro] = useState("");
 
   // Texto sugerido (derivado); vira o texto do médico assim que ele edita à mão.
@@ -40,15 +42,17 @@ export default function Atestado() {
     ...(r.cid ? [{ titulo: "CID-10 (informado com autorização do paciente)", texto: r.cid }] : []),
   ];
 
+  const paramsDe = (r) => ({
+    clinicaId, pacienteId, profissionalId: r.profissionalId || profissionalId,
+    titulo: TIPOS[r.tipo] || "Atestado médico", codigo: r.id.slice(0, 8).toUpperCase(),
+    data: r.criadoEm?.toDate?.(), secoes: secoesDe(r),
+  });
+
   async function gerar(r) {
     setGerandoId(r.id);
     setErro("");
     try {
-      const res = await emitirDocumentoPdf({
-        clinicaId, pacienteId, profissionalId: r.profissionalId || profissionalId,
-        titulo: TIPOS[r.tipo] || "Atestado médico", codigo: r.id.slice(0, 8).toUpperCase(),
-        data: r.criadoEm?.toDate?.(), secoes: secoesDe(r),
-      });
+      const res = await emitirDocumentoPdf(paramsDe(r));
       if (res.medicoSemCrm) setErro("O PDF foi gerado, mas o CRM do médico não está cadastrado — preencha em Configurações → Editar Usuário.");
     } catch (err) {
       console.error("Erro ao gerar PDF do atestado:", err);
@@ -142,12 +146,16 @@ export default function Atestado() {
                   <button onClick={() => gerar(r)} disabled={gerandoId === r.id} className="flex items-center gap-1 text-[11px] font-semibold text-brand-700 bg-brand-50 hover:bg-brand-100 disabled:opacity-60 px-2.5 py-1 rounded-md focus-ring">
                     {gerandoId === r.id ? <Loader2 size={12} className="animate-spin" /> : <FileDown size={12} />} PDF
                   </button>
+                  <button onClick={() => setEnvio(paramsDe(r))} title="Enviar ao paciente" className="ml-1.5 inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-md focus-ring">
+                    <Send size={12} /> Enviar
+                  </button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+    {envio && <EnviarDocumentoModal params={envio} onClose={() => setEnvio(null)} />}
     </div>
   );
 }

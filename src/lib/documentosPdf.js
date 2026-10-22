@@ -137,6 +137,13 @@ export async function gerarPdfDocumento({ clinica, medico, paciente, titulo, sec
   return { blob: pdf.output("blob"), nomeArquivo: `${slug}_${pac}.pdf` };
 }
 
+/** Carrega o contexto e gera o PDF (sem abrir janela) — usado pelo envio ao paciente. */
+export async function prepararDocumentoPdf({ clinicaId, pacienteId, profissionalId, titulo, secoes, data, codigo }) {
+  const ctx = await carregarContextoDocumento({ clinicaId, pacienteId, profissionalId });
+  const { blob, nomeArquivo } = await gerarPdfDocumento({ ...ctx, titulo, secoes, data, codigo });
+  return { blob, nomeArquivo, medicoSemCrm: !ctx.medico?.boardNumber, clinica: ctx.clinica, paciente: ctx.paciente };
+}
+
 /**
  * Carrega o contexto, gera o PDF e abre numa nova aba (pra imprimir/salvar).
  * Se o navegador bloquear a aba, baixa o arquivo. Deve ser chamada direto de um clique.

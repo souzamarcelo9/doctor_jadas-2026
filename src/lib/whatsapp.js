@@ -45,6 +45,12 @@ export function montarMensagemComprovante(pacienteNome, link) {
   return `Olá, ${primeiroNome}! Segue o comprovante/nota fiscal do seu atendimento: ${link}\n\nSe você tem convênio com reembolso, pode usar esse documento pra solicitar junto ao seu plano. Qualquer dúvida, estamos à disposição.`;
 }
 
+/** Mensagem pra mandar um documento clínico (PDF) pro paciente. */
+export function montarMensagemDocumento(pacienteNome, tituloDoc, link, clinicaNome) {
+  const primeiroNome = (pacienteNome || "").split(" ")[0];
+  return `Olá, ${primeiroNome}! Segue o documento "${tituloDoc}" emitido pela ${clinicaNome || "clínica"}: ${link}\n\nQualquer dúvida, estamos à disposição.`;
+}
+
 /** Abre o WhatsApp Web/App com a mensagem já pronta para o número informado.
  * Não é uma API de envio automático — ainda precisa de um clique manual
  * dentro do WhatsApp para efetivamente enviar. */

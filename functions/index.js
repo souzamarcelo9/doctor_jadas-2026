@@ -1800,8 +1800,8 @@ function obterBaseUrl() {
   return projectId ? `https://${projectId}.web.app` : "";
 }
 
-function enviarEmailResend({ para, assunto, html }) {
-  const body = JSON.stringify({ from: emailFromParam.value(), to: [para], subject: assunto, html });
+function enviarEmailResend({ para, assunto, html, anexos }) {
+  const body = JSON.stringify({ from: emailFromParam.value(), to: [para], subject: assunto, html, ...(anexos?.length ? { attachments: anexos } : {}) });
   return new Promise((resolve, reject) => {
     const req = https.request(
       {
@@ -1952,6 +1952,65 @@ exports.enviarComprovanteFinanceiro = onCall({ region: REGION, timeoutSeconds: 3
 
   await contaRef.update({ comprovanteEnviadoEm: new Date().toISOString(), comprovanteEnviadoPor: request.auth.uid });
 
+  return { ok: true };
+});
+
+/**
+ * Envia por e-mail ao paciente um documento clínico em PDF (encaminhamento,
+ * atestado, pedido de exames…) gerado no navegador, como anexo.
+ *
+ * Entrada: { clinicaId, pacienteId, email, titulo, nomeArquivo, pdfBase64 }
+ * Saída:   { ok: true }
+ */
+exports.documentoEnviarPorEmail = onCall({ region: REGION, timeoutSeconds: 30, memory: "256MiB", secrets: [resendApiKey] }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId, pacienteId, email, titulo, nomeArquivo, pdfBase64 } = request.data || {};
+  if (!clinicaId || !pacienteId || !pdfBase64) throw new HttpsError("invalid-argument", "Dados incompletos.");
+  const destino = String(email || "").trim();
+  if (destino.length > 150 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(destino)) {
+    throw new HttpsError("invalid-argument", "Informe um e-mail válido.");
+  }
+  if (typeof pdfBase64 !== "string" || pdfBase64.length > 4 * 1024 * 1024) {
+    throw new HttpsError("invalid-argument", "PDF grande demais.");
+  }
+  const bytes = Buffer.from(pdfBase64, "base64");
+  if (bytes.subarray(0, 5).toString("latin1") !== "%PDF-") {
+    throw new HttpsError("invalid-argument", "O arquivo enviado não é um PDF válido.");
+  }
+
+  const membroSnap = await db.doc(`clinicas/${clinicaId}/membros/${request.auth.uid}`).get();
+  if (!membroSnap.exists || membroSnap.data().ativo !== true) {
+    throw new HttpsError("permission-denied", "Você precisa ser membro desta clínica.");
+  }
+  if (!resendApiKey.value()) {
+    throw new HttpsError("failed-precondition", "Envio de e-mail ainda não configurado neste ambiente (RESEND_API_KEY ausente). Avise o administrador do sistema.");
+  }
+
+  const [clinicaSnap, pacienteSnap] = await Promise.all([
+    db.doc(`clinicas/${clinicaId}`).get(),
+    db.doc(`clinicas/${clinicaId}/pacientes/${pacienteId}`).get(),
+  ]);
+  if (!pacienteSnap.exists) throw new HttpsError("not-found", "Paciente não encontrado.");
+  const clinicaNome = clinicaSnap.data()?.nome || "sua clínica";
+  const primeiroNome = (pacienteSnap.data()?.nome || "").split(" ")[0] || "";
+  const tituloDoc = String(titulo || "Documento médico").slice(0, 80);
+  const arquivo = String(nomeArquivo || "documento.pdf").replace(/[^\w.\-]+/g, "_").slice(0, 80);
+
+  try {
+    await enviarEmailResend({
+      para: destino,
+      assunto: `${tituloDoc} — ${clinicaNome}`,
+      html: `
+        <p>Olá${primeiroNome ? `, ${escaparHtml(primeiroNome)}` : ""}!</p>
+        <p>Segue em anexo o documento <strong>${escaparHtml(tituloDoc)}</strong> emitido pela ${escaparHtml(clinicaNome)}.</p>
+        <p style="color:#888;font-size:12px">Este é um e-mail automático. Em caso de dúvida sobre o documento, procure a clínica.</p>
+      `,
+      anexos: [{ filename: arquivo.endsWith(".pdf") ? arquivo : `${arquivo}.pdf`, content: pdfBase64 }],
+    });
+  } catch (err) {
+    logger.error("Falha ao enviar documento por e-mail via Resend:", err);
+    throw new HttpsError("internal", "Não foi possível enviar o e-mail. Verifique a configuração do Resend (domínio verificado, RESEND_API_KEY).");
+  }
   return { ok: true };
 });
 

@@ -28,6 +28,9 @@ export default function NotasFiscais() {
   const [issuing, setIssuing] = useState(false);
   const [resultado, setResultado] = useState(null);
   const [contaVinculadaId, setContaVinculadaId] = useState("");
+  // Marca quando a pessoa já escreveu a discriminação à mão — a conta vinculada
+  // não pode mais sobrescrevê-la.
+  const [discriminacaoEditada, setDiscriminacaoEditada] = useState(false);
   const [notaAberta, setNotaAberta] = useState(null);
   const [form, setForm] = useState({ tomador: "", cpfCnpj: "", emailTomador: "", codigoServico: "", valor: "", aliquota: "", discriminacao: "Consulta médica", tipoAtendimento: "presencial", cIndOp: "", issRetido: false });
   const [pagina, setPagina] = useState(1);
@@ -61,7 +64,7 @@ export default function NotasFiscais() {
     setContaVinculadaId(id);
     const conta = contasReceber.find((c) => c.id === id);
     if (conta) {
-      setForm((f) => ({ ...f, tomador: conta.pacienteNome || f.tomador, cpfCnpj: conta.pacienteCpf || f.cpfCnpj, valor: String(conta.valor ?? f.valor), discriminacao: conta.descricao || f.discriminacao }));
+      setForm((f) => ({ ...f, tomador: conta.pacienteNome || f.tomador, cpfCnpj: conta.pacienteCpf || f.cpfCnpj, valor: String(conta.valor ?? f.valor), discriminacao: discriminacaoEditada ? f.discriminacao : (conta.descricao || f.discriminacao) }));
     }
   }
 
@@ -125,6 +128,7 @@ export default function NotasFiscais() {
 
       setForm({ tomador: "", cpfCnpj: "", emailTomador: "", codigoServico: "", valor: "", aliquota: "", discriminacao: "Consulta médica", tipoAtendimento: "presencial", cIndOp: "", issRetido: false });
       setContaVinculadaId("");
+      setDiscriminacaoEditada(false);
     } catch (err) {
       console.error("Erro ao emitir NFS-e:", err);
       setResultado({ status: "erro", detalhe: err.message || "Falha ao emitir." });
@@ -229,7 +233,7 @@ export default function NotasFiscais() {
             )}
             <label className="block text-xs">
               <span className="text-ink-500 font-medium">Discriminação dos serviços</span>
-              <textarea rows={3} value={form.discriminacao} onChange={(e) => setForm({ ...form, discriminacao: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring resize-none" />
+              <textarea rows={3} value={form.discriminacao} onChange={(e) => { setDiscriminacaoEditada(true); setForm({ ...form, discriminacao: e.target.value }); }} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-2.5 py-1.5 focus-ring resize-none" />
             </label>
 
             <button disabled={issuing || !firebaseConfigured || !certConfigurado} className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-lg focus-ring">

@@ -37,6 +37,9 @@ export default function DadosFiscaisModal({ open, onClose }) {
     emailDocumento: form.emailDocumento ?? clinica?.emailDocumento ?? "",
     cidadeDocumento: form.cidadeDocumento ?? clinica?.cidadeDocumento ?? "São Paulo",
     simplesNacional: form.simplesNacional ?? clinica?.simplesNacional ?? false,
+    nfseNacionalAmbiente: form.nfseNacionalAmbiente ?? clinica?.nfseNacionalAmbiente ?? "homologacao",
+    pTotTribSN: form.pTotTribSN ?? clinica?.pTotTribSN ?? "6.00",
+    regApTribSN: form.regApTribSN ?? clinica?.regApTribSN ?? "1",
   };
 
   async function salvar() {
@@ -45,6 +48,10 @@ export default function DadosFiscaisModal({ open, onClose }) {
     if (apenasDigitos(valores.cnpj).length !== 14) { setErro("CNPJ precisa ter 14 dígitos."); return; }
     if (!apenasDigitos(valores.inscricaoMunicipal)) { setErro("Informe a Inscrição Municipal (CCM)."); return; }
     if (valores.cIndOpPadrao && !cIndOpValido(valores.cIndOpPadrao)) { setErro("O Indicador de Operação (cIndOp) precisa ter 6 dígitos."); return; }
+    if (valores.simplesNacional) {
+      const p = Number(String(valores.pTotTribSN).replace(",", "."));
+      if (!(p >= 0 && p < 100)) { setErro("Informe o percentual aproximado de tributos do Simples (ex.: 6.00)."); return; }
+    }
     setSalvando(true);
     try {
       await atualizarDocumento("clinicas", clinicaId, {
@@ -60,6 +67,9 @@ export default function DadosFiscaisModal({ open, onClose }) {
         emailDocumento: valores.emailDocumento.trim(),
         cidadeDocumento: valores.cidadeDocumento.trim() || "São Paulo",
         simplesNacional: valores.simplesNacional,
+        nfseNacionalAmbiente: valores.nfseNacionalAmbiente === "producao" ? "producao" : "homologacao",
+        pTotTribSN: String(valores.pTotTribSN).replace(",", ".").trim(),
+        regApTribSN: String(valores.regApTribSN),
       });
       setSucesso(true);
     } catch (err) {
@@ -107,14 +117,42 @@ export default function DadosFiscaisModal({ open, onClose }) {
                 <span className="text-ink-500 font-medium">Regime tributário da clínica</span>
                 <select value={valores.simplesNacional ? "simples" : "normal"} onChange={(e) => setForm({ ...form, simplesNacional: e.target.value === "simples" })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring">
                   <option value="normal">Lucro Presumido ou Lucro Real — nota nova com IBS/CBS (layout v2)</option>
-                  <option value="simples">Simples Nacional / MEI — nota só com ISS (layout v1)</option>
+                  <option value="simples">Simples Nacional — emissão pelo Emissor Nacional (obrigatório desde 01/11/2026)</option>
                 </select>
                 <span className={`block mt-1 text-[11px] rounded-lg p-2 ${valores.simplesNacional ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"}`}>
                   {valores.simplesNacional
-                    ? "Atenção: neste regime a nota sai SEM a segunda página de IBS/CBS (a Prefeitura não aceita o layout novo para Simples Nacional). Se a clínica é Lucro Presumido ou Real, troque a opção acima."
+                    ? "Neste regime a nota é emitida pelo Emissor Nacional da NFS-e (Sefin Nacional) — o sistema paulistano não aceita mais emissão nova do Simples Nacional. IBS/CBS só entra nas notas do Simples a partir de 2027. Se a clínica é Lucro Presumido ou Real, troque a opção acima."
                     : "A nota é emitida no layout novo da Reforma Tributária: sai com a segunda página de IBS e CBS, obrigatória para Lucro Presumido e Lucro Real."}
                 </span>
               </label>
+
+              {valores.simplesNacional && (
+                <div className="border border-sky-100 bg-sky-50/50 rounded-lg p-3 space-y-3">
+                  <p className="text-xs font-semibold text-ink-700">Emissor Nacional (Simples Nacional)</p>
+                  <label className="block text-xs">
+                    <span className="text-ink-500 font-medium">Ambiente de emissão</span>
+                    <select value={valores.nfseNacionalAmbiente} onChange={(e) => setForm({ ...form, nfseNacionalAmbiente: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring">
+                      <option value="homologacao">Testes (produção restrita) — notas SEM validade fiscal</option>
+                      <option value="producao">Produção — notas com validade fiscal</option>
+                    </select>
+                    <span className="text-[11px] text-ink-500 block mt-1">Comece em Testes, confira uma nota emitida e só então mude para Produção.</span>
+                  </label>
+                  <label className="block text-xs">
+                    <span className="text-ink-500 font-medium">Regime de apuração dos tributos</span>
+                    <select value={String(valores.regApTribSN)} onChange={(e) => setForm({ ...form, regApTribSN: e.target.value })} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring">
+                      <option value="1">Tributos federais e ISS apurados pelo Simples Nacional (padrão)</option>
+                      <option value="2">Federais pelo Simples; ISS por fora do Simples</option>
+                      <option value="3">Federais e ISS por fora do Simples</option>
+                    </select>
+                    <span className="text-[11px] text-ink-500 block mt-1">Só mude se a empresa ultrapassou o sublimite do Simples — confirme com o contador.</span>
+                  </label>
+                  <label className="block text-xs">
+                    <span className="text-ink-500 font-medium">% aproximado de tributos (Lei 12.741) — alíquota do Simples</span>
+                    <input value={valores.pTotTribSN} onChange={(e) => setForm({ ...form, pTotTribSN: e.target.value })} placeholder="6.00" className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring" />
+                    <span className="text-[11px] text-ink-500 block mt-1">Informativo, impresso na nota. Use a alíquota efetiva do Simples do período (peça ao contador). 6,00% é a 1ª faixa do Anexo III.</span>
+                  </label>
+                </div>
+              )}
 
               <label className="block text-xs">
                 <span className="text-ink-500 font-medium">Alíquota ISS padrão (ex: 0.02 = 2%)</span>

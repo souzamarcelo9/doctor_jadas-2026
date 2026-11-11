@@ -149,13 +149,14 @@ function DetalheNota({ nota, clinicaId, clinica }) {
           </div>
           <div className="flex items-center gap-2">
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${st.tone}`}>{st.label}</span>
-            {layoutDaNota(nota) && <span title="Layout com que a nota foi enviada" className={`text-xs font-semibold px-2.5 py-1 rounded-full ${layoutDaNota(nota) === 2 ? "bg-indigo-50 text-indigo-700" : "bg-amber-50 text-amber-700"}`}>{layoutDaNota(nota) === 2 ? "ISS + IBS/CBS" : "só ISS (v1) — sem 2ª página IBS/CBS"}</span>}
+            {nota.emissor === "nacional" && <span title="Emissor Nacional (Sefin Nacional)" className="text-xs font-semibold px-2.5 py-1 rounded-full bg-sky-50 text-sky-700">Emissor Nacional{nota.ambienteNacional === "homologacao" ? " · teste" : ""}</span>}
+            {nota.emissor !== "nacional" && layoutDaNota(nota) && <span title="Layout com que a nota foi enviada" className={`text-xs font-semibold px-2.5 py-1 rounded-full ${layoutDaNota(nota) === 2 ? "bg-indigo-50 text-indigo-700" : "bg-amber-50 text-amber-700"}`}>{layoutDaNota(nota) === 2 ? "ISS + IBS/CBS" : "só ISS (v1) — sem 2ª página IBS/CBS"}</span>}
             {nota.status !== "autorizada" && nota.status !== "cancelada" && (
               <button onClick={reenviar} disabled={reenviando} className="flex items-center gap-1.5 text-xs font-semibold bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white px-3 py-1.5 rounded-lg focus-ring">
                 {reenviando ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />} Reenviar esta nota
               </button>
             )}
-            {nota.status === "autorizada" && (
+            {nota.status === "autorizada" && nota.emissor !== "nacional" && (
               <button onClick={() => setMostrarCancelar((v) => !v)} className="flex items-center gap-1.5 text-xs font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 px-3 py-1.5 rounded-lg focus-ring">
                 <Ban size={13} /> Cancelar NFS-e
               </button>
@@ -172,7 +173,7 @@ function DetalheNota({ nota, clinicaId, clinica }) {
         </div>
       )}
 
-      {mostrarCancelar && nota.status === "autorizada" && (
+      {mostrarCancelar && nota.status === "autorizada" && nota.emissor !== "nacional" && (
         <PainelCancelamento clinicaId={clinicaId} nota={nota} onFechar={() => setMostrarCancelar(false)} />
       )}
 

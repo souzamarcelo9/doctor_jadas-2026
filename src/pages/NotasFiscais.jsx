@@ -94,6 +94,7 @@ export default function NotasFiscais() {
         inscricaoMunicipalPrestador: clinica?.inscricaoMunicipal,
         cpfCnpjTomador: form.cpfCnpj,
         razaoSocialTomador: form.tomador,
+        emailTomador: form.emailTomador || "",
         valorServicos: Number(form.valor),
         codigoServico: codigoServicoEfetivo,
         aliquota: Number(aliquotaEfetiva),

@@ -2,7 +2,7 @@
   "name": "functions",
   "description": "Cloud Functions do DoctorPEP — integração com a Groq (transcrição e sumarização por IA)",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "scripts": {

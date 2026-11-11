@@ -19,6 +19,19 @@ export default function NfseDocumentoAcoes({ clinicaId, nota, emailSugerido = ""
 
   if (nota.status !== "autorizada") return null;
 
+  if (nota.emissor === "nacional") {
+    return (
+      <div className="flex items-start gap-2 text-xs bg-sky-50 text-sky-800 border border-sky-100 rounded-lg p-3">
+        <Info size={13} className="mt-0.5 shrink-0" />
+        <div className="space-y-1">
+          <div>NFS-e nº <strong className="font-mono">{nota.numeroNfseNacional || "—"}</strong> emitida pelo Emissor Nacional{nota.ambienteNacional === "homologacao" ? " (ambiente de testes — sem validade fiscal)" : ""}.</div>
+          <div className="break-all">Chave de acesso: <span className="font-mono">{nota.chaveAcessoNacional || "—"}</span></div>
+          <div>O cancelamento e o DANFSe desta nota são feitos pelo portal do Emissor Nacional (nfse.gov.br) usando a chave de acesso acima.</div>
+        </div>
+      </div>
+    );
+  }
+
   if (!link) {
     return (
       <div className="flex items-start gap-2 text-xs bg-gray-50 text-ink-500 border border-black/5 rounded-lg p-3">

@@ -1,0 +1,13 @@
+diff --git a/functions/package.json b/functions/package.json
+index 9db16f9..ec8d74a 100644
+--- a/functions/package.json
++++ b/functions/package.json
+@@ -2,7 +2,7 @@
+   "name": "functions",
+   "description": "Cloud Functions do DoctorPEP — integração com a Groq (transcrição e sumarização por IA)",
+   "engines": {
+-    "node": "20"
++    "node": "22"
+   },
+   "main": "index.js",
+   "scripts": {

@@ -8,6 +8,7 @@ const crypto = require("node:crypto");
 const forge = require("node-forge");
 const axios = require("axios");
 const { SignedXml } = require("xml-crypto");
+const nfseNacional = require("./nfseNacional");
 const { SecretManagerServiceClient } = require("@google-cloud/secret-manager");
 
 initializeApp();
@@ -743,6 +744,155 @@ function montarXmlRps(rps, assinatura) {
     </RPS>`.trim();
 }
 
+// ---------------------------------------------------------------------
+// NFS-e Padrão Nacional (Simples Nacional) — ver functions/nfseNacional.js
+// ---------------------------------------------------------------------
+
+/** Próximo nDPS da clínica — contador transacional, separado por ambiente
+ * (os números de teste não consomem a sequência de produção). */
+async function proximoNumeroDps(clinicaId, ambiente) {
+  const ref = db.doc(`clinicas/${clinicaId}/contadores/nfseNacional_${ambiente}`);
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const proximo = (snap.exists ? Number(snap.data().ultimo) || 0 : 0) + 1;
+    tx.set(ref, { ultimo: proximo, atualizadoEm: new Date().toISOString() }, { merge: true });
+    return proximo;
+  });
+}
+
+async function emitirNfseNacional({ clinicaId, notaFiscalId, dados, clinica }) {
+  const notaRef = db.doc(`clinicas/${clinicaId}/notasFiscais/${notaFiscalId}`);
+  const nota = (await notaRef.get()).data() || {};
+  const ambiente = clinica.nfseNacionalAmbiente === "producao" ? "producao" : "homologacao";
+  const rotuloAmbiente = ambiente === "producao" ? "produção" : "ambiente de testes (sem validade fiscal)";
+
+  if (nota.status === "autorizada" && nota.emissor === "nacional") {
+    return { status: "enviado_teste", detalhe: `NFS-e nº ${nota.numeroNfseNacional || "—"} já emitida.` };
+  }
+
+  // Certificado A1 da clínica (mesmo secret usado pelo webservice paulistano).
+  let keyPem, certPem;
+  try {
+    const secretJson = JSON.parse(await lerSecretMaisRecente(nomeSecretCertificado(clinicaId)));
+    ({ key: keyPem, cert: certPem } = extrairPemDoPfx(Buffer.from(secretJson.pfxBase64, "base64"), secretJson.senha));
+  } catch (err) {
+    logger.error("NFS-e nacional: erro ao ler o certificado:", err);
+    throw new HttpsError("internal", "Não foi possível abrir o certificado configurado — reimporte em Configurações → Certificado Digital.");
+  }
+
+  const cnpj = String(clinica.cnpj || dados.cnpjPrestador || "").replace(/\D/g, "");
+  const cLocEmi = String(clinica.codigoMunicipioIbge || CODIGO_IBGE_SAO_PAULO);
+
+  // Numeração: um nDPS por nota. Se a mesma nota é reenviada (resposta
+  // perdida, timeout), reaproveita o número e antes confere na Sefin se a
+  // DPS já virou NFS-e — assim nunca emite duas vezes.
+  let dps = nota.dpsNacional && nota.dpsNacional.ambiente === ambiente ? nota.dpsNacional : null;
+  const reaproveitada = !!dps;
+  if (!dps) {
+    const nDPS = await proximoNumeroDps(clinicaId, ambiente);
+    dps = { nDPS, serie: nfseNacional.SERIE_PADRAO, ambiente };
+    await notaRef.update({ dpsNacional: dps });
+  }
+  const idDps = nfseNacional.montarIdDps({ cLocEmi, cnpj, serie: dps.serie, nDPS: dps.nDPS });
+
+  const finalizarSucesso = async ({ chaveAcesso, nfseXml, alertas, dpsAssinada }) => {
+    const info = nfseNacional.extrairDadosNfse(nfseXml);
+    const resumo = `NFS-e nº ${info.nNFSe || "—"} emitida pelo Emissor Nacional (${rotuloAmbiente}).`;
+    await notaRef.update({
+      status: "autorizada",
+      emissor: "nacional",
+      layoutVersao: "nacional-1.01",
+      ambienteNacional: ambiente,
+      chaveAcessoNacional: chaveAcesso,
+      numeroNfseNacional: info.nNFSe,
+      ...(dpsAssinada ? { xmlEnviado: dpsAssinada } : {}),
+      respostaWebservice: nfseXml || "",
+      resumoResposta: resumo,
+      alertasNacional: alertas || [],
+      errosNacional: [],
+      enviadoEm: new Date().toISOString(),
+    });
+    return { status: "enviado_teste", detalhe: `${resumo} Chave de acesso: ${chaveAcesso}` };
+  };
+
+  if (reaproveitada) {
+    try {
+      const ja = await nfseNacional.consultarPorIdDps({ ambiente, idDps, keyPem, certPem });
+      if (ja.encontrada && ja.nfseXml) return finalizarSucesso({ chaveAcesso: ja.chaveAcesso, nfseXml: ja.nfseXml });
+    } catch (err) {
+      logger.warn("NFS-e nacional: consulta prévia da DPS falhou (segue com o envio):", err.message);
+    }
+  }
+
+  const { dhEmi, data } = nfseNacional.agoraSaoPaulo();
+  const dpsXml = nfseNacional.montarDpsXml({
+    ambiente, dhEmi, dCompet: data, cnpj, cLocEmi,
+    nDPS: dps.nDPS, serie: dps.serie,
+    inscricaoMunicipal: dados.inscricaoMunicipalPrestador || clinica.inscricaoMunicipal,
+    cTribNac: dados.codigoTribNacional || clinica.cTribNacPadrao || nfseNacional.CTRIBNAC_MEDICINA,
+    cLocPrestacao: dados.codigoMunicipioPrestacao || cLocEmi,
+    descricao: dados.discriminacao,
+    valor: dados.valorServicos,
+    issRetido: dados.issRetido === true,
+    regApTribSN: Number(clinica.regApTribSN) || 1,
+    pTotTribSN: clinica.pTotTribSN != null && clinica.pTotTribSN !== "" ? Number(clinica.pTotTribSN) : 6,
+    tomador: {
+      cpfCnpj: dados.cpfCnpjTomador,
+      nome: dados.razaoSocialTomador,
+      email: dados.emailTomador,
+    },
+  });
+
+  // Algoritmo de assinatura: a documentação não fixa SHA-1 ou SHA-256. Tenta
+  // o que já funcionou nesta clínica (ou SHA-1) e, se a Sefin rejeitar a
+  // assinatura (E0714/E0715/E0716 — nada é emitido nesse caso), tenta o outro.
+  const preferido = clinica.nfseNacionalAssinatura === "sha256" ? "sha256" : "sha1";
+  const ordem = [preferido, preferido === "sha1" ? "sha256" : "sha1"];
+  let resultado = null;
+  let dpsAssinada = null;
+  let usado = null;
+  try {
+    for (const algoritmo of ordem) {
+      dpsAssinada = nfseNacional.assinarDps(dpsXml, keyPem, certPem, algoritmo);
+      resultado = await nfseNacional.enviarDps({ ambiente, dpsAssinadaXml: dpsAssinada, keyPem, certPem });
+      usado = algoritmo;
+      const erroDeAssinatura = !resultado.ok && (resultado.erros || []).some((e) => /^E07(14|15|16)$/.test(String(e.codigo)));
+      if (resultado.ok || !erroDeAssinatura) break;
+    }
+  } catch (err) {
+    const tls = /certificate|SSL|TLS|handshake|ECONN|ENOTFOUND|socket/i.test(err.message || "");
+    const detalhe = tls
+      ? `Não foi possível conectar à Sefin Nacional (${err.message}). Tente novamente em instantes — o número da DPS é reaproveitado, então não há risco de nota duplicada.`
+      : `Falha ao enviar à Sefin Nacional: ${err.message}`;
+    logger.warn("NFS-e nacional: falha de envio:", err.message);
+    await notaRef.update({ status: "erro_certificado", emissor: "nacional", xmlEnviado: dpsXml, erroWebservice: detalhe, tentadoEm: new Date().toISOString() });
+    return { status: "rejeitado_certificado", detalhe };
+  }
+
+  if (resultado.ok) {
+    if (clinica.nfseNacionalAssinatura !== usado) {
+      await db.doc(`clinicas/${clinicaId}`).update({ nfseNacionalAssinatura: usado }).catch(() => {});
+    }
+    return finalizarSucesso({ chaveAcesso: resultado.chaveAcesso, nfseXml: resultado.nfseXml, alertas: resultado.alertas, dpsAssinada });
+  }
+
+  const resumo = nfseNacional.resumirErros(resultado.erros);
+  logger.warn("NFS-e nacional: DPS rejeitada:", resumo);
+  await notaRef.update({
+    status: "rejeitada",
+    emissor: "nacional",
+    layoutVersao: "nacional-1.01",
+    ambienteNacional: ambiente,
+    xmlEnviado: dpsAssinada,
+    resumoResposta: resumo,
+    errosNacional: resultado.erros || [],
+    respostaWebservice: "",
+    enviadoEm: new Date().toISOString(),
+  });
+  return { status: "rejeitada", detalhe: `A Sefin Nacional rejeitou a nota: ${resumo}` };
+}
+
+
 /**
  * Monta o RPS no layout v2 (Reforma Tributária — IBS/CBS), assina, empacota
  * no envelope SOAP e tenta enviar à Prefeitura via TLS mútuo com o
@@ -765,7 +915,7 @@ function montarXmlRps(rps, assinatura) {
  *            (ex: especialidade com NBS próprio no Anexo III da LC 214/2025).
  * Saída:    { status: "enviado_teste" | "rejeitado_certificado" | "erro", detalhe }
  */
-exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (request) => {
+exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 120 }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
   const { clinicaId, notaFiscalId, dados } = request.data || {};
   if (!clinicaId || !notaFiscalId || !dados) {
@@ -777,11 +927,16 @@ exports.nfseEmitir = onCall({ region: REGION, timeoutSeconds: 60 }, async (reque
   if (!certInfo || certInfo.status !== "configurado") {
     throw new HttpsError("failed-precondition", "Nenhum certificado digital configurado para esta clínica. Configure em Configurações → Certificado Digital.");
   }
-  // Contribuintes do Simples Nacional ainda usam o layout v1 (sem os campos
-  // da Reforma Tributária/IBS-CBS) — a Prefeitura rejeita o layout v2 pra
-  // esse regime, confirmado por erro real do webservice ("Contribuinte
-  // cadastrado como Simples Nacional... Deverá ser utilizado o leiaute 1").
-  const layoutVersao = clinicaSnap.data()?.simplesNacional ? 1 : 2;
+  // Desde 01/11/2026 o sistema paulistano não aceita mais emissão nova de
+  // optantes do Simples Nacional (Resoluções CGSN 189 e 191/2026): esses vão
+  // para o Emissor Nacional (Sefin Nacional). Lucro Presumido/Real seguem
+  // no webservice da Prefeitura, logo abaixo.
+  if (clinicaSnap.data()?.simplesNacional) {
+    return emitirNfseNacional({ clinicaId, notaFiscalId, dados, clinica: clinicaSnap.data() });
+  }
+  // (o layout v1 do webservice paulistano só existia para o Simples — mantido
+  // aqui por compatibilidade com notas antigas reenviadas.)
+  const layoutVersao = 2;
 
   let secretJson;
   try {

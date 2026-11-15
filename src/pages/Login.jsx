@@ -50,7 +50,7 @@ export default function Login() {
             <div className="flex items-center gap-2">
               <img src={logoNucleo} alt="Núcleo" className="w-9 h-9 object-contain" />
               <span className="font-display font-semibold tracking-wide">
-                Doctor<span className="text-brand-300">JADS</span>
+                Doctor<span className="text-brand-300">NÚCLEO</span>
               </span>
             </div>
             <h1 className="font-display font-semibold text-2xl leading-snug mt-10">

@@ -1152,6 +1152,72 @@ function extrairChaveNFeDoRetorno(xml) {
   return { inscricaoPrestador, numeroNfe, codigoVerificacao };
 }
 
+/** Cancelamento de NFS-e do Emissor Nacional: evento e101101 assinado,
+ * enviado a POST /nfse/{chave}/eventos. Ver functions/nfseNacional.js. */
+async function cancelarNfseNacional({ clinicaId, notaRef, nota, clinica, uid, cMotivo, xMotivo }) {
+  if (!nota.chaveAcessoNacional) throw new HttpsError("failed-precondition", "Esta nota não tem chave de acesso salva — não dá para cancelar por aqui.");
+  const ambiente = nota.ambienteNacional === "producao" ? "producao" : "homologacao"; // cancela no mesmo ambiente que emitiu (E0831)
+
+  let keyPem, certPem;
+  try {
+    const secretJson = JSON.parse(await lerSecretMaisRecente(nomeSecretCertificado(clinicaId)));
+    ({ key: keyPem, cert: certPem } = extrairPemDoPfx(Buffer.from(secretJson.pfxBase64, "base64"), secretJson.senha));
+  } catch (err) {
+    logger.error("Cancelamento nacional: erro ao ler o certificado:", err);
+    throw new HttpsError("internal", "Não foi possível abrir o certificado configurado — reimporte em Configurações → Certificado Digital.");
+  }
+
+  let pedidoXml;
+  try {
+    pedidoXml = nfseNacional.montarPedidoCancelamentoXml({
+      ambiente,
+      dhEvento: nfseNacional.agoraSaoPaulo().dhEmi,
+      cnpjAutor: clinica.cnpj,
+      chaveAcesso: nota.chaveAcessoNacional,
+      cMotivo: String(cMotivo || ""),
+      xMotivo,
+    });
+  } catch (err) {
+    throw new HttpsError("invalid-argument", err.message);
+  }
+
+  const preferido = clinica.nfseNacionalAssinatura === "sha256" ? "sha256" : "sha1";
+  const ordem = [preferido, preferido === "sha1" ? "sha256" : "sha1"];
+  let resultado = null;
+  let pedidoAssinado = null;
+  try {
+    for (const algoritmo of ordem) {
+      pedidoAssinado = nfseNacional.assinarPedidoEvento(pedidoXml, keyPem, certPem, algoritmo);
+      resultado = await nfseNacional.enviarEvento({ ambiente, chaveAcesso: nota.chaveAcessoNacional, pedidoAssinadoXml: pedidoAssinado, keyPem, certPem });
+      const erroDeAssinatura = !resultado.ok && (resultado.erros || []).some((e) => /^E07(14|15|16)$/.test(String(e.codigo)));
+      if (resultado.ok || !erroDeAssinatura) break;
+    }
+  } catch (err) {
+    const detalhe = `Falha ao enviar o cancelamento à Sefin Nacional: ${err.message}`;
+    logger.warn("Cancelamento nacional: falha de envio:", err.message);
+    await notaRef.update({ xmlCancelamentoEnviado: pedidoXml, erroCancelamento: detalhe, canceladoTentadoEm: new Date().toISOString() });
+    return { status: "rejeitado_certificado", detalhe };
+  }
+
+  if (resultado.ok) {
+    await notaRef.update({
+      status: "cancelada",
+      xmlCancelamentoEnviado: pedidoAssinado,
+      respostaCancelamento: resultado.eventoXml,
+      cancelamentoNacional: { cMotivo: String(cMotivo), xMotivo: String(xMotivo).trim() },
+      erroCancelamento: null,
+      canceladoEm: new Date().toISOString(),
+      canceladoPor: uid,
+    });
+    return { status: "cancelada", detalhe: "NFS-e cancelada na Sefin Nacional." };
+  }
+
+  const resumo = nfseNacional.resumirErros(resultado.erros);
+  logger.warn("Cancelamento nacional rejeitado:", resumo);
+  await notaRef.update({ xmlCancelamentoEnviado: pedidoAssinado, erroCancelamento: `A Sefin Nacional recusou o cancelamento: ${resumo}`, canceladoTentadoEm: new Date().toISOString() });
+  return { status: "rejeitada", detalhe: resumo };
+}
+
 /**
  * Cancela uma NF-e já autorizada. Só o dono da clínica (papel admin) pode
  * chamar — mesmo critério já usado pra gerenciar o certificado digital,
@@ -1181,6 +1247,12 @@ exports.nfseCancelar = onCall({ region: REGION, timeoutSeconds: 60 }, async (req
   if (!notaSnap.exists) throw new HttpsError("not-found", "Nota fiscal não encontrada.");
   const nota = notaSnap.data();
   if (nota.status === "cancelada") throw new HttpsError("failed-precondition", "Essa nota já foi cancelada.");
+
+  // Notas emitidas pelo Emissor Nacional (Simples Nacional) são canceladas
+  // por evento e101101 na Sefin Nacional, não pelo webservice paulistano.
+  if (nota.emissor === "nacional") {
+    return cancelarNfseNacional({ clinicaId, notaRef, nota, clinica: clinicaDados, uid: request.auth.uid, cMotivo: dadosOverride?.cMotivo, xMotivo: dadosOverride?.xMotivo });
+  }
 
   const chaveExtraida = extrairChaveNFeDoRetorno(nota.respostaWebservice);
   const inscricaoMunicipalPrestador = (dadosOverride?.inscricaoMunicipalPrestador || chaveExtraida.inscricaoPrestador || clinicaDados.inscricaoMunicipal || "").replace(/\D/g, "");

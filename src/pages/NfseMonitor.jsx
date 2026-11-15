@@ -156,7 +156,7 @@ function DetalheNota({ nota, clinicaId, clinica }) {
                 {reenviando ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />} Reenviar esta nota
               </button>
             )}
-            {nota.status === "autorizada" && nota.emissor !== "nacional" && (
+            {nota.status === "autorizada" && (
               <button onClick={() => setMostrarCancelar((v) => !v)} className="flex items-center gap-1.5 text-xs font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 px-3 py-1.5 rounded-lg focus-ring">
                 <Ban size={13} /> Cancelar NFS-e
               </button>
@@ -173,8 +173,10 @@ function DetalheNota({ nota, clinicaId, clinica }) {
         </div>
       )}
 
-      {mostrarCancelar && nota.status === "autorizada" && nota.emissor !== "nacional" && (
-        <PainelCancelamento clinicaId={clinicaId} nota={nota} onFechar={() => setMostrarCancelar(false)} />
+      {mostrarCancelar && nota.status === "autorizada" && (
+        nota.emissor === "nacional"
+          ? <PainelCancelamentoNacional clinicaId={clinicaId} nota={nota} onFechar={() => setMostrarCancelar(false)} />
+          : <PainelCancelamento clinicaId={clinicaId} nota={nota} onFechar={() => setMostrarCancelar(false)} />
       )}
 
       {nota.canceladoEm && (
@@ -221,6 +223,77 @@ function DetalheNota({ nota, clinicaId, clinica }) {
       {!nota.xmlEnviado && !nota.respostaWebservice && !nota.erroWebservice && (
         <div className="card p-4 text-xs text-ink-500">Essa tentativa ainda não tem XML registrado (pode ser de antes dessa funcionalidade existir, ou ainda está pendente de envio).</div>
       )}
+    </div>
+  );
+}
+
+/** Cancelamento de nota do Emissor Nacional: pede a justificativa (código +
+ * texto de 15 a 255 caracteres), como exige o evento e101101. */
+function PainelCancelamentoNacional({ clinicaId, nota, onFechar }) {
+  const [cMotivo, setCMotivo] = useState("1");
+  const [xMotivo, setXMotivo] = useState("");
+  const [confirmando, setConfirmando] = useState(false);
+  const [cancelando, setCancelando] = useState(false);
+  const [erro, setErro] = useState("");
+  const motivoOk = xMotivo.trim().length >= 15 && xMotivo.trim().length <= 255;
+
+  async function confirmar() {
+    setErro("");
+    setCancelando(true);
+    try {
+      const resultado = await nfseCancelar(clinicaId, nota.id, { cMotivo, xMotivo: xMotivo.trim() });
+      if (resultado.status === "cancelada") onFechar();
+      else setErro(resultado.detalhe ? `A Sefin Nacional recusou o cancelamento: ${resultado.detalhe}` : "A Sefin Nacional recusou o cancelamento.");
+    } catch (err) {
+      console.error("Erro ao cancelar NFS-e nacional:", err);
+      setErro(err.message || "Não foi possível enviar o cancelamento.");
+    } finally {
+      setCancelando(false);
+    }
+  }
+
+  return (
+    <div className="card p-4 bg-rose-50/40 border-rose-100 space-y-3">
+      <div className="flex items-start gap-2">
+        <ShieldAlert size={16} className="text-rose-600 mt-0.5 shrink-0" />
+        <div className="text-xs text-ink-700">
+          <span className="font-semibold text-ink-900">Cancelar esta NFS-e é irreversível.</span> O pedido é assinado com o certificado da clínica e enviado ao Emissor Nacional. Prazo e outras regras de cancelamento dependem do município e podem recusar o pedido.
+        </div>
+      </div>
+      {!confirmando ? (
+        <div className="space-y-3">
+          <label className="block text-xs">
+            <span className="text-ink-500 font-medium">Justificativa</span>
+            <select value={cMotivo} onChange={(e) => setCMotivo(e.target.value)} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring">
+              <option value="1">Erro na emissão</option>
+              <option value="2">Serviço não prestado</option>
+              <option value="9">Outros</option>
+            </select>
+          </label>
+          <label className="block text-xs">
+            <span className="text-ink-500 font-medium">Descreva o motivo (15 a 255 caracteres)</span>
+            <textarea rows={2} value={xMotivo} maxLength={255} onChange={(e) => setXMotivo(e.target.value)} className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring" />
+            <span className="text-[11px] text-ink-500">{xMotivo.trim().length}/255</span>
+          </label>
+        </div>
+      ) : null}
+      {erro && <p className="text-xs text-rose-700">{erro}</p>}
+      <div className="flex items-center gap-2">
+        {!confirmando ? (
+          <>
+            <button onClick={() => setConfirmando(true)} disabled={!motivoOk} className="text-xs font-semibold bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white px-3.5 py-1.5 rounded-lg focus-ring">Continuar</button>
+            <button onClick={onFechar} className="text-xs font-semibold text-ink-500 hover:text-ink-900 px-3 py-1.5 rounded-lg focus-ring">Cancelar</button>
+          </>
+        ) : (
+          <>
+            <span className="text-xs text-ink-700">Confirma o cancelamento da NFS-e nº <strong>{nota.numeroNfseNacional || "—"}</strong>?</span>
+            <button onClick={confirmar} disabled={cancelando} className="flex items-center gap-1.5 text-xs font-semibold bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white px-3.5 py-1.5 rounded-lg focus-ring ml-auto">
+              {cancelando ? <Loader2 size={13} className="animate-spin" /> : <Ban size={13} />} Sim, cancelar
+            </button>
+            <button onClick={() => setConfirmando(false)} disabled={cancelando} className="text-xs font-semibold text-ink-500 hover:text-ink-900 px-3 py-1.5 rounded-lg focus-ring">Voltar</button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

@@ -26,7 +26,7 @@ export default function NfseDocumentoAcoes({ clinicaId, nota, emailSugerido = ""
         <div className="space-y-1">
           <div>NFS-e nº <strong className="font-mono">{nota.numeroNfseNacional || "—"}</strong> emitida pelo Emissor Nacional{nota.ambienteNacional === "homologacao" ? " (ambiente de testes — sem validade fiscal)" : ""}.</div>
           <div className="break-all">Chave de acesso: <span className="font-mono">{nota.chaveAcessoNacional || "—"}</span></div>
-          <div>O cancelamento e o DANFSe desta nota são feitos pelo portal do Emissor Nacional (nfse.gov.br) usando a chave de acesso acima.</div>
+          <div>O DANFSe (PDF) desta nota pode ser obtido no portal do Emissor Nacional (nfse.gov.br) com a chave de acesso acima.</div>
         </div>
       </div>
     );

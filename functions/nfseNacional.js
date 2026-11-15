@@ -139,13 +139,14 @@ function primeiroCertPem(certPem) {
   return m[0];
 }
 
-/** Assina o <infDPS> (enveloped, C14N) e anexa <Signature> como último
- * filho de <DPS>, como o leiaute exige (TCDPS: infDPS, Signature). */
-function assinarDps(dpsXml, privateKeyPem, certPem, algoritmo = "sha1") {
+/** Assina um elemento por Id (enveloped, C14N) e anexa <Signature> como
+ * último filho da raiz. DPS: infDPS dentro de DPS. Pedido de evento:
+ * infPedReg dentro de pedRegEvento. */
+function assinarElemento(xml, { elemento, raiz }, privateKeyPem, certPem, algoritmo = "sha1") {
   const alg = ALGORITMOS[algoritmo];
   if (!alg) throw new Error(`Algoritmo de assinatura desconhecido: ${algoritmo}`);
-  const id = dpsXml.match(/<infDPS[^>]*\sId="([^"]+)"/)?.[1];
-  if (!id) throw new Error("DPS sem Id.");
+  const id = xml.match(new RegExp(`<${elemento}[^>]*\\sId="([^"]+)"`))?.[1];
+  if (!id) throw new Error(`${elemento} sem Id.`);
   const sig = new SignedXml({
     privateKey: privateKeyPem,
     publicCert: primeiroCertPem(certPem),
@@ -153,13 +154,33 @@ function assinarDps(dpsXml, privateKeyPem, certPem, algoritmo = "sha1") {
     canonicalizationAlgorithm: C14N,
   });
   sig.addReference({
-    xpath: "//*[local-name(.)='infDPS']",
+    xpath: `//*[local-name(.)='${elemento}']`,
     uri: `#${id}`,
     transforms: ["http://www.w3.org/2000/09/xmldsig#enveloped-signature", C14N],
     digestAlgorithm: alg.digest,
   });
-  sig.computeSignature(dpsXml, { location: { reference: "//*[local-name(.)='DPS']", action: "append" } });
+  sig.computeSignature(xml, { location: { reference: `//*[local-name(.)='${raiz}']`, action: "append" } });
   return sig.getSignedXml();
+}
+
+const assinarDps = (xml, key, cert, algoritmo) => assinarElemento(xml, { elemento: "infDPS", raiz: "DPS" }, key, cert, algoritmo);
+const assinarPedidoEvento = (xml, key, cert, algoritmo) => assinarElemento(xml, { elemento: "infPedReg", raiz: "pedRegEvento" }, key, cert, algoritmo);
+
+/**
+ * Pedido de registro do evento de cancelamento (e101101).
+ * Id = "PRE" + chave de acesso (50) + código do evento (101101) = 59 posições.
+ * Assinatura obrigatória (Anexo II). cMotivo: 1 erro na emissão, 2 serviço
+ * não prestado, 9 outros. xMotivo: 15 a 255 caracteres.
+ */
+function montarPedidoCancelamentoXml({ ambiente, dhEvento, cnpjAutor, chaveAcesso, cMotivo, xMotivo }) {
+  const chave = apenasDigitos(chaveAcesso);
+  if (chave.length !== 50) throw new Error("Chave de acesso da NFS-e inválida (precisa ter 50 dígitos).");
+  const cnpj = apenasDigitos(cnpjAutor);
+  if (cnpj.length !== 14) throw new Error("CNPJ do autor inválido.");
+  if (!["1", "2", "9"].includes(String(cMotivo))) throw new Error("Justificativa de cancelamento inválida.");
+  const motivo = textoLivre(xMotivo, 255);
+  if (motivo.length < 15) throw new Error("Descreva o motivo do cancelamento com pelo menos 15 caracteres.");
+  return `<pedRegEvento xmlns="${NS_NFSE}" versao="${VERSAO_LEIAUTE}"><infPedReg Id="PRE${chave}101101"><tpAmb>${ambiente === "producao" ? 1 : 2}</tpAmb><verAplic>${VER_APLIC}</verAplic><dhEvento>${dhEvento}</dhEvento><CNPJAutor>${cnpj}</CNPJAutor><chNFSe>${chave}</chNFSe><e101101><xDesc>Cancelamento de NFS-e</xDesc><cMotivo>${cMotivo}</cMotivo><xMotivo>${esc(motivo)}</xMotivo></e101101></infPedReg></pedRegEvento>`;
 }
 
 /** GZip + base64 do XML em UTF-8 (padrão de troca da API). A mensagem
@@ -218,6 +239,20 @@ async function enviarDps({ ambiente, dpsAssinadaXml, keyPem, certPem }) {
   return { ok: false, http, erros, bruto: typeof corpo === "string" ? corpo.slice(0, 500) : undefined };
 }
 
+/** Envia o pedido de evento (já assinado) para uma NFS-e.
+ * Devolve { ok, http, eventoXml, erros }. */
+async function enviarEvento({ ambiente, chaveAcesso, pedidoAssinadoXml, keyPem, certPem }) {
+  const { http, corpo } = await chamarSefin({
+    ambiente, metodo: "POST", caminho: `/nfse/${apenasDigitos(chaveAcesso)}/eventos`, keyPem, certPem,
+    corpo: { pedidoRegistroEventoXmlGZipB64: compactarXml(pedidoAssinadoXml) },
+  });
+  if (http === 201 && corpo?.eventoXmlGZipB64) {
+    return { ok: true, http, eventoXml: descompactarXml(corpo.eventoXmlGZipB64) };
+  }
+  const erros = corpo?.erros || (corpo?.erro ? [corpo.erro] : []);
+  return { ok: false, http, erros, bruto: typeof corpo === "string" ? corpo.slice(0, 500) : undefined };
+}
+
 /** Recupera a nota de uma DPS já enviada (resposta perdida, timeout...).
  * Evita emitir duas vezes: consulta pelo Id da DPS e, se existir, busca a NFS-e. */
 async function consultarPorIdDps({ ambiente, idDps, keyPem, certPem }) {
@@ -237,6 +272,6 @@ function extrairDadosNfse(nfseXml) {
 
 module.exports = {
   VERSAO_LEIAUTE, SERIE_PADRAO, CTRIBNAC_MEDICINA, URLS,
-  montarIdDps, montarDpsXml, assinarDps, compactarXml, descompactarXml,
+  montarIdDps, montarDpsXml, assinarDps, assinarPedidoEvento, assinarElemento, montarPedidoCancelamentoXml, enviarEvento, compactarXml, descompactarXml,
   resumirErros, enviarDps, consultarPorIdDps, extrairDadosNfse, agoraSaoPaulo,
 };

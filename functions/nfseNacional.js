@@ -90,6 +90,9 @@ function dec2(n) {
  *  - regEspTrib = 0 quando a apuração é pelo SN (E0175).
  *  - sem dedução/redução/benefício municipal para quem apura pelo SN.
  *  - IBS/CBS só é aceito a partir da competência 01/01/2027 (E0850) — não vai.
+ *  - finNFSe (0 = NFS-e regular) é exigido logo após tpEmit pelo esquema em uso na
+ *    Sefin Nacional (SefinNacional_1.6.0), mais novo que o XSD v1.01 de 09/02/2026:
+ *    descoberto pelo erro E1235 em produção restrita.
  */
 function montarDpsXml(p) {
   const cnpj = apenasDigitos(p.cnpj);
@@ -128,7 +131,7 @@ function montarDpsXml(p) {
   const descricao = textoLivre(p.descricao, 1000);
   if (!descricao) throw new Error("A discriminação do serviço é obrigatória.");
 
-  return `<DPS xmlns="${NS_NFSE}" versao="${VERSAO_LEIAUTE}"><infDPS Id="${id}"><tpAmb>${p.ambiente === "producao" ? 1 : 2}</tpAmb><dhEmi>${p.dhEmi}</dhEmi><verAplic>${VER_APLIC}</verAplic><serie>${serie}</serie><nDPS>${nDPS}</nDPS><dCompet>${p.dCompet}</dCompet><tpEmit>1</tpEmit><cLocEmi>${cLocEmi}</cLocEmi><prest><CNPJ>${cnpj}</CNPJ>${im && im.length <= 15 ? `<IM>${im}</IM>` : ""}<regTrib><opSimpNac>3</opSimpNac><regApTribSN>${regApTribSN}</regApTribSN><regEspTrib>0</regEspTrib></regTrib></prest>${toma.replace(/\n\s*/g, "")}<serv><locPrest><cLocPrestacao>${apenasDigitos(p.cLocPrestacao || cLocEmi)}</cLocPrestacao></locPrest><cServ><cTribNac>${cTribNac}</cTribNac><xDescServ>${esc(descricao)}</xDescServ></cServ></serv><valores><vServPrest><vServ>${dec2(valor)}</vServ></vServPrest><trib><tribMun><tribISSQN>1</tribISSQN><tpRetISSQN>${p.issRetido ? 2 : 1}</tpRetISSQN></tribMun><totTrib><pTotTribSN>${dec2(pTotTribSN)}</pTotTribSN></totTrib></trib></valores></infDPS></DPS>`;
+  return `<DPS xmlns="${NS_NFSE}" versao="${VERSAO_LEIAUTE}"><infDPS Id="${id}"><tpAmb>${p.ambiente === "producao" ? 1 : 2}</tpAmb><dhEmi>${p.dhEmi}</dhEmi><verAplic>${VER_APLIC}</verAplic><serie>${serie}</serie><nDPS>${nDPS}</nDPS><dCompet>${p.dCompet}</dCompet><tpEmit>1</tpEmit><finNFSe>0</finNFSe><cLocEmi>${cLocEmi}</cLocEmi><prest><CNPJ>${cnpj}</CNPJ>${im && im.length <= 15 ? `<IM>${im}</IM>` : ""}<regTrib><opSimpNac>3</opSimpNac><regApTribSN>${regApTribSN}</regApTribSN><regEspTrib>0</regEspTrib></regTrib></prest>${toma.replace(/\n\s*/g, "")}<serv><locPrest><cLocPrestacao>${apenasDigitos(p.cLocPrestacao || cLocEmi)}</cLocPrestacao></locPrest><cServ><cTribNac>${cTribNac}</cTribNac><xDescServ>${esc(descricao)}</xDescServ></cServ></serv><valores><vServPrest><vServ>${dec2(valor)}</vServ></vServPrest><trib><tribMun><tribISSQN>1</tribISSQN><tpRetISSQN>${p.issRetido ? 2 : 1}</tpRetISSQN></tribMun><totTrib><pTotTribSN>${dec2(pTotTribSN)}</pTotTribSN></totTrib></trib></valores></infDPS></DPS>`;
 }
 
 /** Primeiro certificado de um PEM com cadeia (o do titular, na ordem que

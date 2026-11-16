@@ -876,8 +876,8 @@ async function emitirNfseNacional({ clinicaId, notaFiscalId, dados, clinica }) {
     return finalizarSucesso({ chaveAcesso: resultado.chaveAcesso, nfseXml: resultado.nfseXml, alertas: resultado.alertas, dpsAssinada });
   }
 
-  const resumo = nfseNacional.resumirErros(resultado.erros);
-  logger.warn("NFS-e nacional: DPS rejeitada:", resumo);
+  const resumo = nfseNacional.resumirErros(resultado.erros, resultado.http);
+  logger.warn("NFS-e nacional: DPS rejeitada:", resumo, resultado.bruto);
   await notaRef.update({
     status: "rejeitada",
     emissor: "nacional",
@@ -885,7 +885,9 @@ async function emitirNfseNacional({ clinicaId, notaFiscalId, dados, clinica }) {
     ambienteNacional: ambiente,
     xmlEnviado: dpsAssinada,
     resumoResposta: resumo,
-    errosNacional: resultado.erros || [],
+    errosNacional: nfseNacional.normalizarErros(resultado.erros),
+    retornoBrutoNacional: resultado.bruto || "",
+    httpNacional: resultado.http || null,
     respostaWebservice: "",
     enviadoEm: new Date().toISOString(),
   });
@@ -1212,9 +1214,9 @@ async function cancelarNfseNacional({ clinicaId, notaRef, nota, clinica, uid, cM
     return { status: "cancelada", detalhe: "NFS-e cancelada na Sefin Nacional." };
   }
 
-  const resumo = nfseNacional.resumirErros(resultado.erros);
-  logger.warn("Cancelamento nacional rejeitado:", resumo);
-  await notaRef.update({ xmlCancelamentoEnviado: pedidoAssinado, erroCancelamento: `A Sefin Nacional recusou o cancelamento: ${resumo}`, canceladoTentadoEm: new Date().toISOString() });
+  const resumo = nfseNacional.resumirErros(resultado.erros, resultado.http);
+  logger.warn("Cancelamento nacional rejeitado:", resumo, resultado.bruto);
+  await notaRef.update({ xmlCancelamentoEnviado: pedidoAssinado, retornoBrutoCancelamentoNacional: resultado.bruto || "", erroCancelamento: `A Sefin Nacional recusou o cancelamento: ${resumo}`, canceladoTentadoEm: new Date().toISOString() });
   return { status: "rejeitada", detalhe: resumo };
 }
 

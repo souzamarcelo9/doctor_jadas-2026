@@ -194,11 +194,48 @@ function descompactarXml(b64) {
   return zlib.gunzipSync(Buffer.from(b64, "base64")).toString("utf8");
 }
 
+/** A Sefin devolve a lista de erros em JSON, mas a capitalização das chaves
+ * (codigo/Codigo) e o formato (array, objeto único, texto) variam entre as
+ * rotas — normaliza tudo para { codigo, descricao, complemento }. */
+function normalizarErros(bruto) {
+  const itens = Array.isArray(bruto) ? bruto : bruto ? [bruto] : [];
+  return itens
+    .map((e) => {
+      if (typeof e === "string") return { codigo: "", descricao: e, complemento: "" };
+      if (!e || typeof e !== "object") return null;
+      const pega = (...nomes) => {
+        for (const k of Object.keys(e)) if (nomes.includes(k.toLowerCase()) && e[k] != null && e[k] !== "") return String(e[k]);
+        return "";
+      };
+      const codigo = pega("codigo", "code", "cod");
+      const descricao = pega("descricao", "mensagem", "message", "msg", "detail", "title");
+      const complemento = pega("complemento", "detalhe", "detalhes");
+      return codigo || descricao || complemento ? { codigo, descricao, complemento } : { codigo: "", descricao: JSON.stringify(e).slice(0, 400), complemento: "" };
+    })
+    .filter(Boolean);
+}
+
+/** Erros da resposta HTTP: tenta `erros`, `erro`, `errors`, e por fim o corpo inteiro. */
+function extrairErrosDaResposta(corpo) {
+  if (corpo && typeof corpo === "object") {
+    const lista = normalizarErros(corpo.erros || corpo.erro || corpo.errors || corpo.Erros || corpo.Erro);
+    if (lista.length) return lista;
+    if (corpo.mensagem || corpo.message || corpo.title) return normalizarErros(corpo);
+  }
+  return [];
+}
+
+function brutoDaResposta(corpo) {
+  const t = typeof corpo === "string" ? corpo : JSON.stringify(corpo ?? "");
+  return String(t).slice(0, 2000);
+}
+
 /** Texto curto a partir da lista de erros da Sefin. */
-function resumirErros(erros) {
-  if (!Array.isArray(erros) || !erros.length) return "A Sefin Nacional rejeitou a DPS, sem detalhe.";
-  return erros
-    .map((e) => [e.codigo, e.descricao || e.mensagem].filter(Boolean).join(" — ") + (e.complemento ? ` (${e.complemento})` : ""))
+function resumirErros(erros, http) {
+  const lista = normalizarErros(erros);
+  if (!lista.length) return `A Sefin Nacional rejeitou o pedido sem detalhar o motivo${http ? ` (HTTP ${http})` : ""}.`;
+  return lista
+    .map((e) => [e.codigo, e.descricao].filter(Boolean).join(" — ") + (e.complemento ? ` (${e.complemento})` : ""))
     .join(" | ");
 }
 
@@ -235,8 +272,7 @@ async function enviarDps({ ambiente, dpsAssinadaXml, keyPem, certPem }) {
       alertas: corpo.alertas || [],
     };
   }
-  const erros = corpo?.erros || (corpo?.erro ? [corpo.erro] : []);
-  return { ok: false, http, erros, bruto: typeof corpo === "string" ? corpo.slice(0, 500) : undefined };
+  return { ok: false, http, erros: extrairErrosDaResposta(corpo), bruto: brutoDaResposta(corpo) };
 }
 
 /** Envia o pedido de evento (já assinado) para uma NFS-e.
@@ -249,8 +285,7 @@ async function enviarEvento({ ambiente, chaveAcesso, pedidoAssinadoXml, keyPem, 
   if (http === 201 && corpo?.eventoXmlGZipB64) {
     return { ok: true, http, eventoXml: descompactarXml(corpo.eventoXmlGZipB64) };
   }
-  const erros = corpo?.erros || (corpo?.erro ? [corpo.erro] : []);
-  return { ok: false, http, erros, bruto: typeof corpo === "string" ? corpo.slice(0, 500) : undefined };
+  return { ok: false, http, erros: extrairErrosDaResposta(corpo), bruto: brutoDaResposta(corpo) };
 }
 
 /** Recupera a nota de uma DPS já enviada (resposta perdida, timeout...).
@@ -273,5 +308,5 @@ function extrairDadosNfse(nfseXml) {
 module.exports = {
   VERSAO_LEIAUTE, SERIE_PADRAO, CTRIBNAC_MEDICINA, URLS,
   montarIdDps, montarDpsXml, assinarDps, assinarPedidoEvento, assinarElemento, montarPedidoCancelamentoXml, enviarEvento, compactarXml, descompactarXml,
-  resumirErros, enviarDps, consultarPorIdDps, extrairDadosNfse, agoraSaoPaulo,
+  resumirErros, normalizarErros, enviarDps, consultarPorIdDps, extrairDadosNfse, agoraSaoPaulo,
 };

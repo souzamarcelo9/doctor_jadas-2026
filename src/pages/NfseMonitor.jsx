@@ -196,9 +196,28 @@ function DetalheNota({ nota, clinicaId, clinica }) {
         </div>
       )}
 
+      {nota.emissor === "nacional" && (nota.status === "rejeitada" || nota.errosNacional?.length > 0) && (
+        <div className="card p-4 bg-rose-50 border-rose-100 space-y-2">
+          <div className="text-xs font-semibold text-rose-700">Retorno da Sefin Nacional{nota.httpNacional ? ` (HTTP ${nota.httpNacional})` : ""}</div>
+          {(nota.errosNacional || []).length > 0 ? (
+            <ul className="space-y-1">
+              {nota.errosNacional.map((e, i) => (
+                <li key={i} className="text-xs text-rose-800">
+                  {e.codigo && <span className="font-mono font-semibold">{e.codigo}</span>}{e.codigo && e.descricao ? " — " : ""}{e.descricao}
+                  {e.complemento && <span className="text-rose-600"> ({e.complemento})</span>}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-rose-800">{nota.resumoResposta || "A Sefin Nacional não detalhou o motivo."}</p>
+          )}
+          {nota.retornoBrutoNacional && <BlocoXml titulo="Resposta bruta da Sefin Nacional" conteudo={nota.retornoBrutoNacional} />}
+        </div>
+      )}
+
       {errosEmissao.length > 0 ? (
         <ListaErrosAmigaveis titulo="Retorno da emissão" itens={errosEmissao} />
-      ) : nota.resumoResposta ? (
+      ) : nota.resumoResposta && nota.emissor !== "nacional" ? (
         <div className={`card p-4 flex items-start gap-2 ${nota.status === "erro_certificado" ? "bg-rose-50 border-rose-100" : "bg-amber-50 border-amber-100"}`}>
           <AlertTriangle size={15} className={nota.status === "erro_certificado" ? "text-rose-600 mt-0.5 shrink-0" : "text-amber-600 mt-0.5 shrink-0"} />
           <div>

@@ -1,0 +1,23 @@
+diff --git a/functions/nfseNacional.js b/functions/nfseNacional.js
+index 35d26d9..fbeeb94 100644
+--- a/functions/nfseNacional.js
++++ b/functions/nfseNacional.js
+@@ -183,11 +183,14 @@ function montarPedidoCancelamentoXml({ ambiente, dhEvento, cnpjAutor, chaveAcess
+   return `<pedRegEvento xmlns="${NS_NFSE}" versao="${VERSAO_LEIAUTE}"><infPedReg Id="PRE${chave}101101"><tpAmb>${ambiente === "producao" ? 1 : 2}</tpAmb><verAplic>${VER_APLIC}</verAplic><dhEvento>${dhEvento}</dhEvento><CNPJAutor>${cnpj}</CNPJAutor><chNFSe>${chave}</chNFSe><e101101><xDesc>Cancelamento de NFS-e</xDesc><cMotivo>${cMotivo}</cMotivo><xMotivo>${esc(motivo)}</xMotivo></e101101></infPedReg></pedRegEvento>`;
+ }
+ 
+-/** GZip + base64 do XML em UTF-8 (padrão de troca da API). A mensagem
+- * descompactada não pode ter declaração com outra codificação nem prefixo
+- * de namespace (E1228/E1229). */
++/** GZip + base64 do XML em UTF-8 (padrão de troca da API). A Sefin só aceita
++ * se o XML declarar a codificação (E1229 "XML não está utilizando codificação
++ * UTF-8" quando a declaração falta) e sem prefixo de namespace (E1228). A
++ * declaração fica fora do elemento assinado, então não altera a assinatura. */
++const DECLARACAO_XML = '<?xml version="1.0" encoding="UTF-8"?>';
+ function compactarXml(xml) {
+-  return zlib.gzipSync(Buffer.from(xml, "utf8")).toString("base64");
++  const comDeclaracao = /^\s*<\?xml/i.test(xml) ? xml : DECLARACAO_XML + xml;
++  return zlib.gzipSync(Buffer.from(comDeclaracao, "utf8")).toString("base64");
+ }
+ 
+ function descompactarXml(b64) {

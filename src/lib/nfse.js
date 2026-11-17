@@ -32,10 +32,10 @@ export async function nfseEmitir(clinicaId, notaFiscalId, dados) {
 
 /** Consulta ao Sistema Nacional quais códigos de tributação de saúde o
  * município habilitou (e o convênio dele). */
-export async function nfseNacionalParametros(clinicaId) {
+export async function nfseNacionalParametros(clinicaId, extras = []) {
   if (!firebaseConfigured) throw new Error("Firebase não configurado.");
   const chamar = httpsCallable(functionsInstance, "nfseNacionalParametros");
-  const { data } = await chamar({ clinicaId });
+  const { data } = await chamar({ clinicaId, extras });
   return data;
 }
 

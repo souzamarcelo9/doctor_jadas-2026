@@ -331,6 +331,8 @@ const CODIGOS_SAUDE = [
   ["041801", "Inseminação artificial e fertilização in vitro"],
   ["042001", "Coleta de sangue e materiais biológicos"],
   ["042101", "Unidade de atendimento móvel e congêneres"],
+  // Para testar com o CNPJ de uma empresa de contabilidade (ex.: Núcleo):
+  ["171601", "Auditoria"], ["171901", "Contabilidade, inclusive serviços técnicos e auxiliares"],
 ];
 
 async function chamarParametros({ ambiente, caminho, keyPem, certPem, timeout = 20000 }) {
@@ -345,9 +347,11 @@ async function chamarParametros({ ambiente, caminho, keyPem, certPem, timeout = 
   return { http: resp.status, corpo: resp.data };
 }
 
-/** Consulta o convênio do município e, para cada código de saúde, se há
- * alíquota parametrizada (= código administrado pelo município). */
-async function consultarCodigosHabilitados({ ambiente, codigoMunicipio, competencia, keyPem, certPem }) {
+/** Consulta o convênio do município e, para cada código da lista (mais os
+ * extras pedidos), se há alíquota parametrizada (= código administrado pelo
+ * município). A competência é um date-time no Swagger; o formato aceito pelo
+ * servidor é descoberto na primeira chamada (400 = formato recusado). */
+async function consultarCodigosHabilitados({ ambiente, codigoMunicipio, competencia, extras = [], keyPem, certPem }) {
   const mun = apenasDigitos(codigoMunicipio);
   const conv = await chamarParametros({ ambiente, caminho: `/${mun}/convenio`, keyPem, certPem }).catch((e) => ({ http: 0, corpo: { mensagem: e.message } }));
   const convenio = {
@@ -356,29 +360,48 @@ async function consultarCodigosHabilitados({ ambiente, codigoMunicipio, competen
     parametros: conv.corpo?.parametrosConvenio || null,
   };
 
+  const lista = [...CODIGOS_SAUDE];
+  for (const x of extras) {
+    const c = apenasDigitos(x);
+    if (c.length === 6 && !lista.some(([k]) => k === c)) lista.push([c, "Código informado por você"]);
+  }
+
+  const formatos = [`${competencia}T00:00:00`, `${competencia}T00:00:00Z`, competencia];
+  let formato = formatos[0];
+  const consultar = async (codigo, fmt) => chamarParametros({ ambiente, caminho: `/${mun}/${codigo}/${encodeURIComponent(fmt)}/aliquota`, keyPem, certPem });
+
   const codigos = [];
-  const fila = [...CODIGOS_SAUDE];
+  const registrar = (codigo, descricao, r) => {
+    const mapa = r.corpo?.aliquotas && typeof r.corpo.aliquotas === "object" ? r.corpo.aliquotas : {};
+    const aliquotas = Object.values(mapa).flat();
+    codigos.push({
+      codigo, descricao, http: r.http,
+      habilitado: r.http === 200 && aliquotas.length > 0,
+      aliquotas: aliquotas.slice(0, 3).map((a) => ({ aliq: a.Aliq ?? a.aliq ?? null, incidencia: a.Incidencia ?? a.incidencia ?? null })),
+      mensagem: r.corpo?.mensagem || (r.http === 400 && typeof r.corpo === "string" ? r.corpo.slice(0, 200) : null),
+    });
+  };
+
+  // 1ª consulta (primeiro código): escolhe o formato de data que o servidor aceita.
+  const [c0, d0] = lista.shift();
+  let r0 = null;
+  for (const fmt of formatos) {
+    r0 = await consultar(c0, fmt).catch((e) => ({ http: 0, corpo: { mensagem: e.message } }));
+    if (r0.http !== 400) { formato = fmt; break; }
+  }
+  registrar(c0, d0, r0);
+
+  const fila = [...lista];
   const trabalhar = async () => {
     while (fila.length) {
       const [codigo, descricao] = fila.shift();
-      try {
-        const r = await chamarParametros({ ambiente, caminho: `/${mun}/${codigo}/${competencia}/aliquota`, keyPem, certPem });
-        const mapa = r.corpo?.aliquotas && typeof r.corpo.aliquotas === "object" ? r.corpo.aliquotas : {};
-        const aliquotas = Object.values(mapa).flat();
-        codigos.push({
-          codigo, descricao, http: r.http,
-          habilitado: r.http === 200 && aliquotas.length > 0,
-          aliquotas: aliquotas.slice(0, 3).map((a) => ({ aliq: a.Aliq ?? a.aliq ?? null, incidencia: a.Incidencia ?? a.incidencia ?? null })),
-          mensagem: r.corpo?.mensagem || null,
-        });
-      } catch (e) {
-        codigos.push({ codigo, descricao, http: 0, habilitado: false, aliquotas: [], mensagem: e.message });
-      }
+      const r = await consultar(codigo, formato).catch((e) => ({ http: 0, corpo: { mensagem: e.message } }));
+      registrar(codigo, descricao, r);
     }
   };
   await Promise.all([trabalhar(), trabalhar(), trabalhar(), trabalhar()]);
-  codigos.sort((a, b) => a.codigo.localeCompare(b.codigo));
-  return { convenio, codigos };
+  codigos.sort((x, y) => x.codigo.localeCompare(y.codigo));
+  return { convenio, codigos, formatoCompetencia: formato };
 }
 
 /** Campos úteis do XML da NFS-e devolvido (número e data de processamento). */

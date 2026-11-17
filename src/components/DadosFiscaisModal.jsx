@@ -17,12 +17,13 @@ function ConsultaCodigosMunicipio({ clinicaId, onEscolher }) {
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState("");
   const [res, setRes] = useState(null);
+  const [outroCodigo, setOutroCodigo] = useState("");
 
   async function consultar() {
     setErro("");
     setCarregando(true);
     try {
-      setRes(await nfseNacionalParametros(clinicaId));
+      setRes(await nfseNacionalParametros(clinicaId, outroCodigo.replace(/\D/g, "").length === 6 ? [outroCodigo.replace(/\D/g, "")] : []));
     } catch (err) {
       console.error("Erro ao consultar parâmetros do município:", err);
       setErro(err.message || "Não foi possível consultar o município.");
@@ -37,9 +38,12 @@ function ConsultaCodigosMunicipio({ clinicaId, onEscolher }) {
 
   return (
     <div className="space-y-2">
-      <button type="button" onClick={consultar} disabled={carregando} className="flex items-center gap-1.5 text-xs font-semibold text-sky-700 hover:text-sky-900 disabled:opacity-60 focus-ring rounded">
-        {carregando ? <Loader2 size={13} className="animate-spin" /> : <Landmark size={13} />} Consultar códigos habilitados no município
-      </button>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={consultar} disabled={carregando} className="flex items-center gap-1.5 text-xs font-semibold text-sky-700 hover:text-sky-900 disabled:opacity-60 focus-ring rounded">
+          {carregando ? <Loader2 size={13} className="animate-spin" /> : <Landmark size={13} />} Consultar códigos habilitados no município
+        </button>
+        <input value={outroCodigo} onChange={(e) => setOutroCodigo(e.target.value)} inputMode="numeric" maxLength={6} placeholder="outro código (opcional)" className="text-xs border border-black/10 rounded-lg px-2 py-1 w-40 font-mono focus-ring" />
+      </div>
       {erro && <p className="text-xs text-rose-700">{erro}</p>}
       {res && (
         <div className="text-xs bg-white border border-black/10 rounded-lg p-3 space-y-2">
@@ -65,7 +69,7 @@ function ConsultaCodigosMunicipio({ clinicaId, onEscolher }) {
             </div>
           ) : (
             <p className="text-amber-700">
-              Nenhum código de saúde aparece como habilitado para este município nesta data (respostas HTTP: {[...new Set(res.codigos.map((c) => c.http))].join(", ")}). Se for o ambiente de testes, a parametrização do município pode estar incompleta — confirme com a contadora ou com a Prefeitura.
+              Nenhum código de saúde aparece como habilitado para este município nesta data (respostas HTTP: {[...new Set(res.codigos.map((c) => c.http))].join(", ")}){res.codigos.find((c) => c.mensagem)?.mensagem ? ` — resposta: "${res.codigos.find((c) => c.mensagem).mensagem}"` : ""}. Se for o ambiente de testes, a parametrização do município pode estar incompleta — confirme com a contadora ou com a Prefeitura.
             </p>
           )}
         </div>

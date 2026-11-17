@@ -40,6 +40,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
     nfseNacionalAmbiente: form.nfseNacionalAmbiente ?? clinica?.nfseNacionalAmbiente ?? "homologacao",
     pTotTribSN: form.pTotTribSN ?? clinica?.pTotTribSN ?? "6.00",
     regApTribSN: form.regApTribSN ?? clinica?.regApTribSN ?? "1",
+    cTribNacPadrao: form.cTribNacPadrao ?? clinica?.cTribNacPadrao ?? "040101",
   };
 
   async function salvar() {
@@ -51,6 +52,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
     if (valores.simplesNacional) {
       const p = Number(String(valores.pTotTribSN).replace(",", "."));
       if (!(p >= 0 && p < 100)) { setErro("Informe o percentual aproximado de tributos do Simples (ex.: 6.00)."); return; }
+      if (!/^\d{6}$/.test(String(valores.cTribNacPadrao).replace(/\D/g, ""))) { setErro("O código de tributação nacional tem 6 dígitos (ex.: 040101)."); return; }
     }
     setSalvando(true);
     try {
@@ -70,6 +72,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
         nfseNacionalAmbiente: valores.nfseNacionalAmbiente === "producao" ? "producao" : "homologacao",
         pTotTribSN: String(valores.pTotTribSN).replace(",", ".").trim(),
         regApTribSN: String(valores.regApTribSN),
+        cTribNacPadrao: String(valores.cTribNacPadrao).replace(/\D/g, ""),
       });
       setSucesso(true);
     } catch (err) {
@@ -145,6 +148,11 @@ export default function DadosFiscaisModal({ open, onClose }) {
                       <option value="3">Federais e ISS por fora do Simples</option>
                     </select>
                     <span className="text-[11px] text-ink-500 block mt-1">Só mude se a empresa ultrapassou o sublimite do Simples — confirme com o contador.</span>
+                  </label>
+                  <label className="block text-xs">
+                    <span className="text-ink-500 font-medium">Código de tributação nacional (6 dígitos)</span>
+                    <input value={valores.cTribNacPadrao} onChange={(e) => setForm({ ...form, cTribNacPadrao: e.target.value })} inputMode="numeric" maxLength={6} placeholder="040101" className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring font-mono" />
+                    <span className="text-[11px] text-ink-500 block mt-1">Item da lista de serviços (LC 116) sem pontos: 040101 = Medicina; 040303 = Clínicas, ambulatórios e congêneres; 040301 = Hospitais. O município precisa ter esse código habilitado — confirme com o contador qual usar.</span>
                   </label>
                   <label className="block text-xs">
                     <span className="text-ink-500 font-medium">% aproximado de tributos (Lei 12.741) — alíquota do Simples</span>

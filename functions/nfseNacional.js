@@ -305,6 +305,82 @@ async function consultarPorIdDps({ ambiente, idDps, keyPem, certPem }) {
   return { encontrada: true, chaveAcesso: r.corpo.chaveAcesso, nfseXml: descompactarXml(n.corpo.nfseXmlGZipB64) };
 }
 
+
+// ---------------------------------------------------------------------
+// API de Parâmetros Municipais (ADN) — o que cada município habilitou
+// ---------------------------------------------------------------------
+const URLS_PARAMETROS = {
+  homologacao: "https://adn.producaorestrita.nfse.gov.br/parametrizacao",
+  producao: "https://adn.nfse.gov.br/parametrizacao",
+};
+
+/** Subitens do item 4 (saúde) da lista nacional, com o código de 6 dígitos. */
+const CODIGOS_SAUDE = [
+  ["040101", "Medicina"], ["040102", "Biomedicina"],
+  ["040201", "Análises clínicas e congêneres"], ["040202", "Patologia e congêneres"],
+  ["040203", "Eletricidade médica e congêneres"], ["040204", "Radioterapia, quimioterapia e congêneres"],
+  ["040205", "Ultrassonografia, ressonância, radiologia, tomografia e congêneres"],
+  ["040301", "Hospitais e congêneres"], ["040302", "Laboratórios e congêneres"],
+  ["040303", "Clínicas, sanatórios, ambulatórios e congêneres"],
+  ["040401", "Instrumentação cirúrgica"], ["040501", "Acupuntura"],
+  ["040601", "Enfermagem e serviços auxiliares"], ["040701", "Serviços farmacêuticos"],
+  ["040801", "Terapia ocupacional"], ["040802", "Fisioterapia"], ["040803", "Fonoaudiologia"],
+  ["040901", "Terapias físicas, orgânicas e mentais"], ["041001", "Nutrição"],
+  ["041101", "Obstetrícia"], ["041201", "Odontologia"], ["041301", "Ortóptica"],
+  ["041401", "Próteses sob encomenda"], ["041501", "Psicanálise"], ["041601", "Psicologia"],
+  ["041801", "Inseminação artificial e fertilização in vitro"],
+  ["042001", "Coleta de sangue e materiais biológicos"],
+  ["042101", "Unidade de atendimento móvel e congêneres"],
+];
+
+async function chamarParametros({ ambiente, caminho, keyPem, certPem, timeout = 20000 }) {
+  const url = `${URLS_PARAMETROS[ambiente === "producao" ? "producao" : "homologacao"]}${caminho}`;
+  const resp = await axios.request({
+    method: "GET", url,
+    httpsAgent: agentMtls(keyPem, certPem),
+    headers: { Accept: "application/json" },
+    timeout,
+    validateStatus: () => true,
+  });
+  return { http: resp.status, corpo: resp.data };
+}
+
+/** Consulta o convênio do município e, para cada código de saúde, se há
+ * alíquota parametrizada (= código administrado pelo município). */
+async function consultarCodigosHabilitados({ ambiente, codigoMunicipio, competencia, keyPem, certPem }) {
+  const mun = apenasDigitos(codigoMunicipio);
+  const conv = await chamarParametros({ ambiente, caminho: `/${mun}/convenio`, keyPem, certPem }).catch((e) => ({ http: 0, corpo: { mensagem: e.message } }));
+  const convenio = {
+    http: conv.http,
+    mensagem: conv.corpo?.mensagem || null,
+    parametros: conv.corpo?.parametrosConvenio || null,
+  };
+
+  const codigos = [];
+  const fila = [...CODIGOS_SAUDE];
+  const trabalhar = async () => {
+    while (fila.length) {
+      const [codigo, descricao] = fila.shift();
+      try {
+        const r = await chamarParametros({ ambiente, caminho: `/${mun}/${codigo}/${competencia}/aliquota`, keyPem, certPem });
+        const mapa = r.corpo?.aliquotas && typeof r.corpo.aliquotas === "object" ? r.corpo.aliquotas : {};
+        const aliquotas = Object.values(mapa).flat();
+        codigos.push({
+          codigo, descricao, http: r.http,
+          habilitado: r.http === 200 && aliquotas.length > 0,
+          aliquotas: aliquotas.slice(0, 3).map((a) => ({ aliq: a.Aliq ?? a.aliq ?? null, incidencia: a.Incidencia ?? a.incidencia ?? null })),
+          mensagem: r.corpo?.mensagem || null,
+        });
+      } catch (e) {
+        codigos.push({ codigo, descricao, http: 0, habilitado: false, aliquotas: [], mensagem: e.message });
+      }
+    }
+  };
+  await Promise.all([trabalhar(), trabalhar(), trabalhar(), trabalhar()]);
+  codigos.sort((a, b) => a.codigo.localeCompare(b.codigo));
+  return { convenio, codigos };
+}
+
 /** Campos úteis do XML da NFS-e devolvido (número e data de processamento). */
 function extrairDadosNfse(nfseXml) {
   const pega = (tag) => nfseXml?.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))?.[1]?.trim() || null;
@@ -312,7 +388,7 @@ function extrairDadosNfse(nfseXml) {
 }
 
 module.exports = {
-  VERSAO_LEIAUTE, SERIE_PADRAO, CTRIBNAC_MEDICINA, URLS,
+  VERSAO_LEIAUTE, SERIE_PADRAO, CTRIBNAC_MEDICINA, URLS, URLS_PARAMETROS, CODIGOS_SAUDE,
   montarIdDps, montarDpsXml, assinarDps, assinarPedidoEvento, assinarElemento, montarPedidoCancelamentoXml, enviarEvento, compactarXml, descompactarXml,
-  resumirErros, normalizarErros, enviarDps, consultarPorIdDps, extrairDadosNfse, agoraSaoPaulo,
+  resumirErros, normalizarErros, consultarCodigosHabilitados, enviarDps, consultarPorIdDps, extrairDadosNfse, agoraSaoPaulo,
 };

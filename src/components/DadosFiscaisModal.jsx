@@ -4,9 +4,74 @@ import { useTenant } from "../context/TenantContext";
 import { useFirestoreDoc, atualizarDocumento } from "../lib/firestore";
 import CampoCIndOp from "./CampoCIndOp";
 import { cIndOpValido } from "../lib/nfseCodigos";
+import { nfseNacionalParametros } from "../lib/nfse";
 
 function apenasDigitos(v) {
   return (v || "").replace(/\D/g, "");
+}
+
+/** Consulta ao Sistema Nacional os códigos de saúde que o município habilitou
+ * (erro E0312 = código não administrado pelo município). Clicar num código
+ * habilitado preenche o campo acima. */
+function ConsultaCodigosMunicipio({ clinicaId, onEscolher }) {
+  const [carregando, setCarregando] = useState(false);
+  const [erro, setErro] = useState("");
+  const [res, setRes] = useState(null);
+
+  async function consultar() {
+    setErro("");
+    setCarregando(true);
+    try {
+      setRes(await nfseNacionalParametros(clinicaId));
+    } catch (err) {
+      console.error("Erro ao consultar parâmetros do município:", err);
+      setErro(err.message || "Não foi possível consultar o município.");
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  const habilitados = res?.codigos?.filter((c) => c.habilitado) || [];
+  const conv = res?.convenio?.parametros;
+  const rotuloSimNao = (v) => (v === 1 ? "sim" : v === 0 ? "não" : "—");
+
+  return (
+    <div className="space-y-2">
+      <button type="button" onClick={consultar} disabled={carregando} className="flex items-center gap-1.5 text-xs font-semibold text-sky-700 hover:text-sky-900 disabled:opacity-60 focus-ring rounded">
+        {carregando ? <Loader2 size={13} className="animate-spin" /> : <Landmark size={13} />} Consultar códigos habilitados no município
+      </button>
+      {erro && <p className="text-xs text-rose-700">{erro}</p>}
+      {res && (
+        <div className="text-xs bg-white border border-black/10 rounded-lg p-3 space-y-2">
+          <div className="text-ink-500">
+            Município {res.codigoMunicipio} · competência {res.competencia} · {res.ambiente === "producao" ? "produção" : "produção restrita (testes)"}
+          </div>
+          <div className="text-ink-700">
+            Convênio: {conv ? `aderente ao ambiente nacional: ${rotuloSimNao(conv.aderenteAmbienteNacional)} · ao emissor nacional: ${rotuloSimNao(conv.aderenteEmissorNacional)}` : (res.convenio?.mensagem || `sem retorno (HTTP ${res.convenio?.http || "?"})`)}
+          </div>
+          {habilitados.length > 0 ? (
+            <div className="space-y-1">
+              <div className="font-semibold text-emerald-700">Códigos de saúde habilitados — clique para usar:</div>
+              <div className="flex flex-wrap gap-1.5">
+                {habilitados.map((c) => (
+                  <button key={c.codigo} type="button" onClick={() => onEscolher(c.codigo)} title={c.descricao} className="font-mono px-2 py-1 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-100 hover:bg-emerald-100 focus-ring">
+                    {c.codigo}
+                  </button>
+                ))}
+              </div>
+              <ul className="text-ink-500 space-y-0.5">
+                {habilitados.map((c) => <li key={c.codigo}><span className="font-mono">{c.codigo}</span> — {c.descricao}{c.aliquotas?.[0]?.aliq != null ? ` (ISS ${c.aliquotas[0].aliq}%)` : ""}</li>)}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-amber-700">
+              Nenhum código de saúde aparece como habilitado para este município nesta data (respostas HTTP: {[...new Set(res.codigos.map((c) => c.http))].join(", ")}). Se for o ambiente de testes, a parametrização do município pode estar incompleta — confirme com a contadora ou com a Prefeitura.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function DadosFiscaisModal({ open, onClose }) {
@@ -154,6 +219,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
                     <input value={valores.cTribNacPadrao} onChange={(e) => setForm({ ...form, cTribNacPadrao: e.target.value })} inputMode="numeric" maxLength={6} placeholder="040101" className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring font-mono" />
                     <span className="text-[11px] text-ink-500 block mt-1">Item da lista de serviços (LC 116) sem pontos: 040101 = Medicina; 040303 = Clínicas, ambulatórios e congêneres; 040301 = Hospitais. O município precisa ter esse código habilitado — confirme com o contador qual usar.</span>
                   </label>
+                  <ConsultaCodigosMunicipio clinicaId={clinicaId} onEscolher={(codigo) => setForm({ ...form, cTribNacPadrao: codigo })} />
                   <label className="block text-xs">
                     <span className="text-ink-500 font-medium">% aproximado de tributos (Lei 12.741) — alíquota do Simples</span>
                     <input value={valores.pTotTribSN} onChange={(e) => setForm({ ...form, pTotTribSN: e.target.value })} placeholder="6.00" className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring" />

@@ -918,6 +918,36 @@ async function emitirNfseNacional({ clinicaId, notaFiscalId, dados, clinica }) {
 }
 
 
+/** Diagnóstico: quais códigos de tributação de saúde o município habilitou no
+ * Sistema Nacional (API de Parâmetros Municipais do ADN) e o convênio dele.
+ * Ajuda a escolher o cTribNac sem tentar emitir um por um (E0312). */
+exports.nfseNacionalParametros = onCall({ region: REGION, timeoutSeconds: 120 }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId } = request.data || {};
+  if (!clinicaId) throw new HttpsError("invalid-argument", "Clínica não informada.");
+  await exigirAdmin(clinicaId, request.auth.uid);
+
+  const clinicaSnap = await db.doc(`clinicas/${clinicaId}`).get();
+  const clinica = clinicaSnap.data() || {};
+  if (clinica.certificadoNfse?.status !== "configurado") {
+    throw new HttpsError("failed-precondition", "Configure o certificado digital antes de consultar o município.");
+  }
+  let keyPem, certPem;
+  try {
+    const secretJson = JSON.parse(await lerSecretMaisRecente(nomeSecretCertificado(clinicaId)));
+    ({ key: keyPem, cert: certPem } = extrairPemDoPfx(Buffer.from(secretJson.pfxBase64, "base64"), secretJson.senha));
+  } catch (err) {
+    logger.error("Parâmetros municipais: erro ao ler o certificado:", err);
+    throw new HttpsError("internal", "Não foi possível abrir o certificado configurado.");
+  }
+  const ambiente = clinica.nfseNacionalAmbiente === "producao" ? "producao" : "homologacao";
+  const codigoMunicipio = String(clinica.codigoMunicipioIbge || CODIGO_IBGE_SAO_PAULO);
+  const competencia = nfseNacional.agoraSaoPaulo().data;
+  const resultado = await nfseNacional.consultarCodigosHabilitados({ ambiente, codigoMunicipio, competencia, keyPem, certPem });
+  logger.info("Parâmetros municipais NFS-e nacional:", JSON.stringify({ ambiente, codigoMunicipio, competencia, convenio: resultado.convenio, habilitados: resultado.codigos.filter((c) => c.habilitado).map((c) => c.codigo), http: [...new Set(resultado.codigos.map((c) => c.http))] }));
+  return { ambiente, codigoMunicipio, competencia, ...resultado };
+});
+
 /**
  * Monta o RPS no layout v2 (Reforma Tributária — IBS/CBS), assina, empacota
  * no envelope SOAP e tenta enviar à Prefeitura via TLS mútuo com o

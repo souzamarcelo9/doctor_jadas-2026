@@ -30,6 +30,15 @@ export async function nfseEmitir(clinicaId, notaFiscalId, dados) {
   return data; // { status, detalhe }
 }
 
+/** Consulta ao Sistema Nacional quais códigos de tributação de saúde o
+ * município habilitou (e o convênio dele). */
+export async function nfseNacionalParametros(clinicaId) {
+  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
+  const chamar = httpsCallable(functionsInstance, "nfseNacionalParametros");
+  const { data } = await chamar({ clinicaId });
+  return data;
+}
+
 /** Relê a resposta já salva em cada nota fiscal e recalcula o status
  * (autorizada/rejeitada) — não faz nenhuma chamada nova à Prefeitura, só
  * corrige documentos antigos que ficaram presos como "processando". */

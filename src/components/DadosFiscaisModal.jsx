@@ -23,7 +23,7 @@ function ConsultaCodigosMunicipio({ clinicaId, onEscolher }) {
     setErro("");
     setCarregando(true);
     try {
-      setRes(await nfseNacionalParametros(clinicaId, outroCodigo.replace(/\D/g, "").length === 6 ? [outroCodigo.replace(/\D/g, "")] : []));
+      setRes(await nfseNacionalParametros(clinicaId, [6, 9].includes(outroCodigo.replace(/\D/g, "").length) ? [outroCodigo.replace(/\D/g, "")] : []));
     } catch (err) {
       console.error("Erro ao consultar parâmetros do município:", err);
       setErro(err.message || "Não foi possível consultar o município.");
@@ -42,7 +42,7 @@ function ConsultaCodigosMunicipio({ clinicaId, onEscolher }) {
         <button type="button" onClick={consultar} disabled={carregando} className="flex items-center gap-1.5 text-xs font-semibold text-sky-700 hover:text-sky-900 disabled:opacity-60 focus-ring rounded">
           {carregando ? <Loader2 size={13} className="animate-spin" /> : <Landmark size={13} />} Consultar códigos habilitados no município
         </button>
-        <input value={outroCodigo} onChange={(e) => setOutroCodigo(e.target.value)} inputMode="numeric" maxLength={6} placeholder="outro código (opcional)" className="text-xs border border-black/10 rounded-lg px-2 py-1 w-40 font-mono focus-ring" />
+        <input value={outroCodigo} onChange={(e) => setOutroCodigo(e.target.value)} inputMode="numeric" maxLength={9} placeholder="outro código, 6 ou 9 dígitos" className="text-xs border border-black/10 rounded-lg px-2 py-1 w-48 font-mono focus-ring" />
       </div>
       {erro && <p className="text-xs text-rose-700">{erro}</p>}
       {res && (
@@ -58,7 +58,7 @@ function ConsultaCodigosMunicipio({ clinicaId, onEscolher }) {
               <div className="font-semibold text-emerald-700">Códigos de saúde habilitados — clique para usar:</div>
               <div className="flex flex-wrap gap-1.5">
                 {habilitados.map((c) => (
-                  <button key={c.codigo} type="button" onClick={() => onEscolher(c.codigo)} title={c.descricao} className="font-mono px-2 py-1 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-100 hover:bg-emerald-100 focus-ring">
+                  <button key={c.codigo} type="button" onClick={() => onEscolher(c.codigoNacional, c.codigoMunicipal)} title={c.descricao} className="font-mono px-2 py-1 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-100 hover:bg-emerald-100 focus-ring">
                     {c.codigo}
                   </button>
                 ))}
@@ -110,6 +110,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
     pTotTribSN: form.pTotTribSN ?? clinica?.pTotTribSN ?? "6.00",
     regApTribSN: form.regApTribSN ?? clinica?.regApTribSN ?? "1",
     cTribNacPadrao: form.cTribNacPadrao ?? clinica?.cTribNacPadrao ?? "040101",
+    cTribMunPadrao: form.cTribMunPadrao ?? clinica?.cTribMunPadrao ?? "",
   };
 
   async function salvar() {
@@ -122,6 +123,8 @@ export default function DadosFiscaisModal({ open, onClose }) {
       const p = Number(String(valores.pTotTribSN).replace(",", "."));
       if (!(p >= 0 && p < 100)) { setErro("Informe o percentual aproximado de tributos do Simples (ex.: 6.00)."); return; }
       if (!/^\d{6}$/.test(String(valores.cTribNacPadrao).replace(/\D/g, ""))) { setErro("O código de tributação nacional tem 6 dígitos (ex.: 040101)."); return; }
+      const mun = String(valores.cTribMunPadrao).replace(/\D/g, "");
+      if (mun && mun.length !== 3) { setErro("O desdobro municipal tem 3 dígitos (ex.: 001) ou fica em branco."); return; }
     }
     setSalvando(true);
     try {
@@ -142,6 +145,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
         pTotTribSN: String(valores.pTotTribSN).replace(",", ".").trim(),
         regApTribSN: String(valores.regApTribSN),
         cTribNacPadrao: String(valores.cTribNacPadrao).replace(/\D/g, ""),
+        cTribMunPadrao: String(valores.cTribMunPadrao).replace(/\D/g, ""),
       });
       setSucesso(true);
     } catch (err) {
@@ -223,7 +227,12 @@ export default function DadosFiscaisModal({ open, onClose }) {
                     <input value={valores.cTribNacPadrao} onChange={(e) => setForm({ ...form, cTribNacPadrao: e.target.value })} inputMode="numeric" maxLength={6} placeholder="040101" className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring font-mono" />
                     <span className="text-[11px] text-ink-500 block mt-1">Item da lista de serviços (LC 116) sem pontos: 040101 = Medicina; 040303 = Clínicas, ambulatórios e congêneres; 040301 = Hospitais. O município precisa ter esse código habilitado — confirme com o contador qual usar.</span>
                   </label>
-                  <ConsultaCodigosMunicipio clinicaId={clinicaId} onEscolher={(codigo) => setForm({ ...form, cTribNacPadrao: codigo })} />
+                  <label className="block text-xs">
+                    <span className="text-ink-500 font-medium">Desdobro municipal (3 dígitos, opcional)</span>
+                    <input value={valores.cTribMunPadrao} onChange={(e) => setForm({ ...form, cTribMunPadrao: e.target.value })} inputMode="numeric" maxLength={3} placeholder="001" className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring font-mono" />
+                    <span className="text-[11px] text-ink-500 block mt-1">Os 3 últimos dígitos do código de serviço de 9 dígitos usado na parametrização do município. Deixe em branco se não houver.</span>
+                  </label>
+                  <ConsultaCodigosMunicipio clinicaId={clinicaId} onEscolher={(nacional, municipal) => setForm({ ...form, cTribNacPadrao: nacional, cTribMunPadrao: municipal === "000" ? "" : municipal })} />
                   <label className="block text-xs">
                     <span className="text-ink-500 font-medium">% aproximado de tributos (Lei 12.741) — alíquota do Simples</span>
                     <input value={valores.pTotTribSN} onChange={(e) => setForm({ ...form, pTotTribSN: e.target.value })} placeholder="6.00" className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring" />

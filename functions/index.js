@@ -831,6 +831,7 @@ async function emitirNfseNacional({ clinicaId, notaFiscalId, dados, clinica }) {
     nDPS: dps.nDPS, serie: dps.serie,
     inscricaoMunicipal: incluirIM ? imInformada : "",
     cTribNac: dados.codigoTribNacional || clinica.cTribNacPadrao || nfseNacional.CTRIBNAC_MEDICINA,
+    cTribMun: /^\d{3}$/.test(String(clinica.cTribMunPadrao || "")) ? clinica.cTribMunPadrao : "",
     cLocPrestacao: dados.codigoMunicipioPrestacao || cLocEmi,
     descricao: dados.discriminacao,
     valor: dados.valorServicos,

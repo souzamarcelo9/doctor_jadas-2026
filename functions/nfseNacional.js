@@ -100,6 +100,8 @@ function montarDpsXml(p) {
   const cLocEmi = apenasDigitos(p.cLocEmi);
   if (cLocEmi.length !== 7) throw new Error("Código IBGE do município emissor inválido.");
   const cTribNac = apenasDigitos(p.cTribNac || CTRIBNAC_MEDICINA);
+  const cTribMun = apenasDigitos(p.cTribMun);
+  if (cTribMun && cTribMun.length !== 3) throw new Error("Código de tributação municipal (desdobro) deve ter 3 dígitos.");
   if (cTribNac.length !== 6) throw new Error("Código de tributação nacional deve ter 6 dígitos (ex.: 040101).");
   const valor = Number(p.valor);
   if (!(valor > 0)) throw new Error("Valor do serviço inválido.");
@@ -131,7 +133,7 @@ function montarDpsXml(p) {
   const descricao = textoLivre(p.descricao, 1000);
   if (!descricao) throw new Error("A discriminação do serviço é obrigatória.");
 
-  return `<DPS xmlns="${NS_NFSE}" versao="${VERSAO_LEIAUTE}"><infDPS Id="${id}"><tpAmb>${p.ambiente === "producao" ? 1 : 2}</tpAmb><dhEmi>${p.dhEmi}</dhEmi><verAplic>${VER_APLIC}</verAplic><serie>${serie}</serie><nDPS>${nDPS}</nDPS><dCompet>${p.dCompet}</dCompet><tpEmit>1</tpEmit><finNFSe>0</finNFSe><cLocEmi>${cLocEmi}</cLocEmi><prest><CNPJ>${cnpj}</CNPJ>${im && im.length <= 15 ? `<IM>${im}</IM>` : ""}<regTrib><opSimpNac>3</opSimpNac><regApTribSN>${regApTribSN}</regApTribSN><regEspTrib>0</regEspTrib></regTrib></prest>${toma.replace(/\n\s*/g, "")}<serv><locPrest><cLocPrestacao>${apenasDigitos(p.cLocPrestacao || cLocEmi)}</cLocPrestacao></locPrest><cServ><cTribNac>${cTribNac}</cTribNac><xDescServ>${esc(descricao)}</xDescServ></cServ></serv><valores><vServPrest><vServ>${dec2(valor)}</vServ></vServPrest><trib><tribMun><tribISSQN>1</tribISSQN><tpRetISSQN>${p.issRetido ? 2 : 1}</tpRetISSQN></tribMun><totTrib><pTotTribSN>${dec2(pTotTribSN)}</pTotTribSN></totTrib></trib></valores></infDPS></DPS>`;
+  return `<DPS xmlns="${NS_NFSE}" versao="${VERSAO_LEIAUTE}"><infDPS Id="${id}"><tpAmb>${p.ambiente === "producao" ? 1 : 2}</tpAmb><dhEmi>${p.dhEmi}</dhEmi><verAplic>${VER_APLIC}</verAplic><serie>${serie}</serie><nDPS>${nDPS}</nDPS><dCompet>${p.dCompet}</dCompet><tpEmit>1</tpEmit><finNFSe>0</finNFSe><cLocEmi>${cLocEmi}</cLocEmi><prest><CNPJ>${cnpj}</CNPJ>${im && im.length <= 15 ? `<IM>${im}</IM>` : ""}<regTrib><opSimpNac>3</opSimpNac><regApTribSN>${regApTribSN}</regApTribSN><regEspTrib>0</regEspTrib></regTrib></prest>${toma.replace(/\n\s*/g, "")}<serv><locPrest><cLocPrestacao>${apenasDigitos(p.cLocPrestacao || cLocEmi)}</cLocPrestacao></locPrest><cServ><cTribNac>${cTribNac}</cTribNac>${cTribMun ? `<cTribMun>${cTribMun}</cTribMun>` : ""}<xDescServ>${esc(descricao)}</xDescServ></cServ></serv><valores><vServPrest><vServ>${dec2(valor)}</vServ></vServPrest><trib><tribMun><tribISSQN>1</tribISSQN><tpRetISSQN>${p.issRetido ? 2 : 1}</tpRetISSQN></tribMun><totTrib><pTotTribSN>${dec2(pTotTribSN)}</pTotTribSN></totTrib></trib></valores></infDPS></DPS>`;
 }
 
 /** Primeiro certificado de um PEM com cadeia (o do titular, na ordem que
@@ -360,10 +362,13 @@ async function consultarCodigosHabilitados({ ambiente, codigoMunicipio, competen
     parametros: conv.corpo?.parametrosConvenio || null,
   };
 
-  const lista = [...CODIGOS_SAUDE];
+  // A API de parâmetros pede o código do serviço com NOVE dígitos: os 6 do
+  // código nacional + 3 do desdobro municipal ("000" = sem desdobro).
+  const lista = CODIGOS_SAUDE.map(([c, d]) => [`${c}000`, d]);
   for (const x of extras) {
-    const c = apenasDigitos(x);
-    if (c.length === 6 && !lista.some(([k]) => k === c)) lista.push([c, "Código informado por você"]);
+    let c = apenasDigitos(x);
+    if (c.length === 6) c += "000";
+    if (c.length === 9 && !lista.some(([k]) => k === c)) lista.push([c, "Código informado por você"]);
   }
 
   const formatos = [`${competencia}T00:00:00`, `${competencia}T00:00:00Z`, competencia];
@@ -375,7 +380,7 @@ async function consultarCodigosHabilitados({ ambiente, codigoMunicipio, competen
     const mapa = r.corpo?.aliquotas && typeof r.corpo.aliquotas === "object" ? r.corpo.aliquotas : {};
     const aliquotas = Object.values(mapa).flat();
     codigos.push({
-      codigo, descricao, http: r.http,
+      codigo, codigoNacional: codigo.slice(0, 6), codigoMunicipal: codigo.slice(6), descricao, http: r.http,
       habilitado: r.http === 200 && aliquotas.length > 0,
       aliquotas: aliquotas.slice(0, 3).map((a) => ({ aliq: a.Aliq ?? a.aliq ?? null, incidencia: a.Incidencia ?? a.incidencia ?? null })),
       mensagem: r.corpo?.mensagem || (r.http === 400 && typeof r.corpo === "string" ? r.corpo.slice(0, 200) : null),

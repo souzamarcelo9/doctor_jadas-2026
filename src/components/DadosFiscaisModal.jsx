@@ -230,7 +230,7 @@ export default function DadosFiscaisModal({ open, onClose }) {
                   <label className="block text-xs">
                     <span className="text-ink-500 font-medium">Desdobro municipal (3 dígitos, opcional)</span>
                     <input value={valores.cTribMunPadrao} onChange={(e) => setForm({ ...form, cTribMunPadrao: e.target.value })} inputMode="numeric" maxLength={3} placeholder="001" className="mt-1 w-full text-sm border border-black/10 rounded-lg px-3 py-2 focus-ring font-mono" />
-                    <span className="text-[11px] text-ink-500 block mt-1">Os 3 últimos dígitos do código de serviço de 9 dígitos usado na parametrização do município. Deixe em branco se não houver.</span>
+                    <span className="text-[11px] text-ink-500 block mt-1">Os 3 últimos dígitos do código de serviço de 9 dígitos usado na parametrização do município. Em São Paulo é obrigatório: use 001 (pessoa jurídica). 002/004 (e 099 na medicina) são de profissional autônomo; 003/098, de regime especial de sociedade. Em branco, o sistema usa 001 para 04.01.01 e 17.19.01 em SP.</span>
                   </label>
                   <ConsultaCodigosMunicipio clinicaId={clinicaId} onEscolher={(nacional, municipal) => setForm({ ...form, cTribNacPadrao: nacional, cTribMunPadrao: municipal === "000" ? "" : municipal })} />
                   <label className="block text-xs">

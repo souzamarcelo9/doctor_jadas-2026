@@ -312,6 +312,18 @@ async function consultarPorIdDps({ ambiente, idDps, keyPem, certPem }) {
 // ---------------------------------------------------------------------
 // API de Parâmetros Municipais (ADN) — o que cada município habilitou
 // ---------------------------------------------------------------------
+/**
+ * Código Complementar Municipal (cTribMun) padrão de São Paulo (3550308),
+ * conferido no portal do Emissor Nacional (produção restrita, 18/11/2026).
+ * Em SP o campo é obrigatório. Para pessoa jurídica no Simples usa-se o
+ * genérico "001"; 002/004 (e 099 na medicina) são de profissional autônomo;
+ * 003/098 são de regime especial de sociedade (não se aplica ao Simples).
+ */
+const CTRIBMUN_PADRAO_SP = { "040101": "001", "171901": "001" };
+function cTribMunPadrao(codigoMunicipio, cTribNac) {
+  return String(codigoMunicipio) === "3550308" ? (CTRIBMUN_PADRAO_SP[String(cTribNac)] || "") : "";
+}
+
 const URLS_PARAMETROS = {
   homologacao: "https://adn.producaorestrita.nfse.gov.br/parametrizacao",
   producao: "https://adn.nfse.gov.br/parametrizacao",
@@ -425,5 +437,5 @@ function extrairDadosNfse(nfseXml) {
 module.exports = {
   VERSAO_LEIAUTE, SERIE_PADRAO, CTRIBNAC_MEDICINA, URLS, URLS_PARAMETROS, CODIGOS_SAUDE,
   montarIdDps, montarDpsXml, assinarDps, assinarPedidoEvento, assinarElemento, montarPedidoCancelamentoXml, enviarEvento, compactarXml, descompactarXml,
-  resumirErros, normalizarErros, consultarCodigosHabilitados, enviarDps, consultarPorIdDps, extrairDadosNfse, agoraSaoPaulo,
+  resumirErros, normalizarErros, consultarCodigosHabilitados, cTribMunPadrao, enviarDps, consultarPorIdDps, extrairDadosNfse, agoraSaoPaulo,
 };

@@ -100,7 +100,8 @@ function montarDpsXml(p) {
   const cLocEmi = apenasDigitos(p.cLocEmi);
   if (cLocEmi.length !== 7) throw new Error("Código IBGE do município emissor inválido.");
   const cTribNac = apenasDigitos(p.cTribNac || CTRIBNAC_MEDICINA);
-  const cTribMun = apenasDigitos(p.cTribMun);
+  // "000" é só o sufixo "sem desdobro" da API de parâmetros; não é um código real.
+  const cTribMun = apenasDigitos(p.cTribMun) === "000" ? "" : apenasDigitos(p.cTribMun);
   if (cTribMun && cTribMun.length !== 3) throw new Error("Código de tributação municipal (desdobro) deve ter 3 dígitos.");
   if (cTribNac.length !== 6) throw new Error("Código de tributação nacional deve ter 6 dígitos (ex.: 040101).");
   const valor = Number(p.valor);

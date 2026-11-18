@@ -374,7 +374,12 @@ async function consultarCodigosHabilitados({ ambiente, codigoMunicipio, competen
 
   const formatos = [`${competencia}T00:00:00`, `${competencia}T00:00:00Z`, competencia];
   let formato = formatos[0];
-  const consultar = async (codigo, fmt) => chamarParametros({ ambiente, caminho: `/${mun}/${codigo}/${encodeURIComponent(fmt)}/aliquota`, keyPem, certPem });
+  const caminhos = {};
+  const consultar = async (codigo, fmt) => {
+    const caminho = `/${mun}/${codigo}/${encodeURIComponent(fmt)}/aliquota`;
+    caminhos[codigo] = caminho;
+    return chamarParametros({ ambiente, caminho, keyPem, certPem });
+  };
 
   const codigos = [];
   const registrar = (codigo, descricao, r) => {
@@ -384,6 +389,7 @@ async function consultarCodigosHabilitados({ ambiente, codigoMunicipio, competen
       codigo, codigoNacional: codigo.slice(0, 6), codigoMunicipal: codigo.slice(6), descricao, http: r.http,
       habilitado: r.http === 200 && aliquotas.length > 0,
       aliquotas: aliquotas.slice(0, 3).map((a) => ({ aliq: a.Aliq ?? a.aliq ?? null, incidencia: a.Incidencia ?? a.incidencia ?? null })),
+      caminho: caminhos[codigo] || null,
       mensagem: r.corpo?.mensagem || (r.http === 400 && typeof r.corpo === "string" ? r.corpo.slice(0, 200) : null),
     });
   };

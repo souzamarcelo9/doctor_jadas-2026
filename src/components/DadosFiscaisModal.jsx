@@ -69,7 +69,7 @@ function ConsultaCodigosMunicipio({ clinicaId, onEscolher }) {
             </div>
           ) : (
             <p className="text-amber-700">
-              Nenhum código de saúde aparece como habilitado para este município nesta data (respostas HTTP: {[...new Set(res.codigos.map((c) => c.http))].join(", ")}){res.codigos.find((c) => c.mensagem)?.mensagem ? ` — resposta: "${res.codigos.find((c) => c.mensagem).mensagem}"` : ""}. Se for o ambiente de testes, a parametrização do município pode estar incompleta — confirme com a contadora ou com a Prefeitura.
+              Nenhum código de saúde aparece como habilitado para este município nesta data (respostas HTTP: {[...new Set(res.codigos.map((c) => c.http))].join(", ")}){res.codigos.find((c) => c.mensagem)?.mensagem ? ` — resposta: "${res.codigos.find((c) => c.mensagem).mensagem}"` : ""}{res.codigos[0]?.caminho ? ` — caminho consultado: ${res.codigos[0].caminho}` : ""}. Se for o ambiente de testes, a parametrização do município pode estar incompleta — confirme com a contadora ou com a Prefeitura.
             </p>
           )}
         </div>

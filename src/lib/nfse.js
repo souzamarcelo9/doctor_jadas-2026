@@ -30,6 +30,19 @@ export async function nfseEmitir(clinicaId, notaFiscalId, dados) {
   return data; // { status, detalhe }
 }
 
+/** Baixa o DANFSe (PDF oficial) de uma nota do Emissor Nacional e devolve um
+ * Blob pronto para download, ou { ok: false, mensagem } se o ADN não entregou. */
+export async function nfseNacionalDanfse(clinicaId, notaFiscalId) {
+  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
+  const chamar = httpsCallable(functionsInstance, "nfseNacionalDanfse");
+  const { data } = await chamar({ clinicaId, notaFiscalId });
+  if (!data?.ok) return { ok: false, http: data?.http ?? null, mensagem: data?.mensagem || "" };
+  const bin = atob(data.pdfBase64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return { ok: true, blob: new Blob([bytes], { type: "application/pdf" }), nomeArquivo: data.nomeArquivo };
+}
+
 /** Consulta ao Sistema Nacional quais códigos de tributação de saúde o
  * município habilitou (e o convênio dele). */
 export async function nfseNacionalParametros(clinicaId, extras = []) {

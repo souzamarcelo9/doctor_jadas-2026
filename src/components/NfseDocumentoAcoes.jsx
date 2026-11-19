@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { ExternalLink, Copy, Check, Mail, Loader2, Info } from "lucide-react";
+import { ExternalLink, Copy, Check, Mail, Loader2, Info, FileDown } from "lucide-react";
 import { extrairChaveNFe, montarLinkNfse } from "../lib/nfseErros";
-import { nfseEnviarPorEmail } from "../lib/nfse";
+import { nfseEnviarPorEmail, nfseNacionalDanfse } from "../lib/nfse";
 import { emailValido } from "../lib/masks";
 
 /** Ações sobre o documento de uma NFS-e já autorizada: abrir a página
@@ -16,6 +16,28 @@ export default function NfseDocumentoAcoes({ clinicaId, nota, emailSugerido = ""
   const [copiado, setCopiado] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [feedback, setFeedback] = useState(null);
+  const [baixando, setBaixando] = useState(false);
+  const [erroPdf, setErroPdf] = useState("");
+
+  async function baixarPdfNacional() {
+    setBaixando(true); setErroPdf("");
+    try {
+      const r = await nfseNacionalDanfse(clinicaId, nota.id);
+      if (!r.ok) {
+        setErroPdf(`O Sistema Nacional não entregou o PDF${r.http ? ` (HTTP ${r.http})` : ""}${r.mensagem ? `: ${r.mensagem}` : ""}. Use o portal do Emissor Nacional com a chave de acesso.`);
+        return;
+      }
+      const url = URL.createObjectURL(r.blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = r.nomeArquivo || "DANFSe.pdf";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (err) {
+      setErroPdf(err?.message || "Não foi possível baixar o PDF.");
+    } finally {
+      setBaixando(false);
+    }
+  }
 
   if (nota.status !== "autorizada") return null;
 
@@ -26,7 +48,13 @@ export default function NfseDocumentoAcoes({ clinicaId, nota, emailSugerido = ""
         <div className="space-y-1">
           <div>NFS-e nº <strong className="font-mono">{nota.numeroNfseNacional || "—"}</strong> emitida pelo Emissor Nacional{nota.ambienteNacional === "homologacao" ? " (ambiente de testes — sem validade fiscal)" : ""}.</div>
           <div className="break-all">Chave de acesso: <span className="font-mono">{nota.chaveAcessoNacional || "—"}</span></div>
-          <div>O DANFSe (PDF) desta nota pode ser obtido no portal do Emissor Nacional (nfse.gov.br) com a chave de acesso acima.</div>
+          <div className="pt-1">
+            <button type="button" onClick={baixarPdfNacional} disabled={baixando} className="inline-flex items-center gap-1.5 text-xs font-medium bg-white border border-sky-200 text-sky-800 rounded-lg px-3 py-1.5 hover:bg-sky-100 disabled:opacity-60">
+              {baixando ? <Loader2 size={12} className="animate-spin" /> : <FileDown size={12} />} Baixar PDF (DANFSe)
+            </button>
+          </div>
+          {erroPdf && <div className="text-red-700">{erroPdf}</div>}
+          <div>Se o PDF não baixar, ele também pode ser obtido no portal do Emissor Nacional (nfse.gov.br) com a chave de acesso acima.</div>
         </div>
       </div>
     );

@@ -362,6 +362,29 @@ async function chamarParametros({ ambiente, caminho, keyPem, certPem, timeout = 
   return { http: resp.status, corpo: resp.data };
 }
 
+/** Baixa o DANFSe (PDF oficial) do ADN pela chave de acesso. O endpoint
+ * (`GET {adn}/danfse/{chave}`) vem de referências da comunidade, não do
+ * manual: por isso devolve o diagnóstico (HTTP/mensagem) se não vier PDF. */
+async function baixarDanfse({ ambiente, chave, keyPem, certPem, timeout = 30000 }) {
+  const base = URLS_PARAMETROS[ambiente === "producao" ? "producao" : "homologacao"].replace(/\/parametrizacao$/, "");
+  const url = `${base}/danfse/${apenasDigitos(chave)}`;
+  const resp = await axios.request({
+    method: "GET", url,
+    httpsAgent: agentMtls(keyPem, certPem),
+    headers: { Accept: "application/pdf" },
+    responseType: "arraybuffer",
+    timeout,
+    validateStatus: () => true,
+  });
+  const buf = Buffer.from(resp.data || []);
+  if (resp.status === 200 && buf.slice(0, 4).toString("latin1") === "%PDF") {
+    return { ok: true, http: 200, pdfBase64: buf.toString("base64") };
+  }
+  let mensagem = "";
+  try { mensagem = buf.slice(0, 400).toString("utf8").replace(/\s+/g, " ").trim(); } catch { /* sem corpo legível */ }
+  return { ok: false, http: resp.status, mensagem, url };
+}
+
 /** Consulta o convênio do município e, para cada código da lista (mais os
  * extras pedidos), se há alíquota parametrizada (= código administrado pelo
  * município). A competência é um date-time no Swagger; o formato aceito pelo
@@ -437,5 +460,5 @@ function extrairDadosNfse(nfseXml) {
 module.exports = {
   VERSAO_LEIAUTE, SERIE_PADRAO, CTRIBNAC_MEDICINA, URLS, URLS_PARAMETROS, CODIGOS_SAUDE,
   montarIdDps, montarDpsXml, assinarDps, assinarPedidoEvento, assinarElemento, montarPedidoCancelamentoXml, enviarEvento, compactarXml, descompactarXml,
-  resumirErros, normalizarErros, consultarCodigosHabilitados, cTribMunPadrao, enviarDps, consultarPorIdDps, extrairDadosNfse, agoraSaoPaulo,
+  resumirErros, normalizarErros, consultarCodigosHabilitados, baixarDanfse, cTribMunPadrao, enviarDps, consultarPorIdDps, extrairDadosNfse, agoraSaoPaulo,
 };

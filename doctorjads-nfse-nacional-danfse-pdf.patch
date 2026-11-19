@@ -1,0 +1,178 @@
+diff --git a/functions/index.js b/functions/index.js
+index fa409ab..887cd09 100644
+--- a/functions/index.js
++++ b/functions/index.js
+@@ -921,6 +921,50 @@ async function emitirNfseNacional({ clinicaId, notaFiscalId, dados, clinica }) {
+ }
+ 
+ 
++/** Baixa o DANFSe (PDF) de uma NFS-e emitida pelo Emissor Nacional, direto do
++ * ADN, com o certificado da clínica. Qualquer membro da clínica pode baixar.
++ * Entrada: { clinicaId, notaFiscalId }  Saída: { ok, pdfBase64?, nomeArquivo?, http?, mensagem? } */
++exports.nfseNacionalDanfse = onCall({ region: REGION, timeoutSeconds: 60 }, async (request) => {
++  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
++  const { clinicaId, notaFiscalId } = request.data || {};
++  if (!clinicaId || !notaFiscalId) throw new HttpsError("invalid-argument", "Dados incompletos.");
++  const membroSnap = await db.doc(`clinicas/${clinicaId}/membros/${request.auth.uid}`).get();
++  if (!membroSnap.exists) throw new HttpsError("permission-denied", "Sem acesso a esta clínica.");
++
++  const [clinicaSnap, notaSnap] = await Promise.all([
++    db.doc(`clinicas/${clinicaId}`).get(),
++    db.doc(`clinicas/${clinicaId}/notasFiscais/${notaFiscalId}`).get(),
++  ]);
++  if (!notaSnap.exists) throw new HttpsError("not-found", "Nota fiscal não encontrada.");
++  const nota = notaSnap.data();
++  const clinica = clinicaSnap.data() || {};
++  if (nota.emissor !== "nacional" || !/^\d{50}$/.test(String(nota.chaveAcessoNacional || ""))) {
++    throw new HttpsError("failed-precondition", "Esta nota não foi emitida pelo Emissor Nacional.");
++  }
++  if (clinica.certificadoNfse?.status !== "configurado") {
++    throw new HttpsError("failed-precondition", "Certificado digital não configurado.");
++  }
++  let keyPem, certPem;
++  try {
++    const secretJson = JSON.parse(await lerSecretMaisRecente(nomeSecretCertificado(clinicaId)));
++    ({ key: keyPem, cert: certPem } = extrairPemDoPfx(Buffer.from(secretJson.pfxBase64, "base64"), secretJson.senha));
++  } catch (err) {
++    logger.error("DANFSe: erro ao ler o certificado:", err);
++    throw new HttpsError("internal", "Não foi possível abrir o certificado configurado.");
++  }
++  const ambiente = nota.ambienteNacional === "producao" ? "producao" : "homologacao";
++  try {
++    const r = await nfseNacional.baixarDanfse({ ambiente, chave: nota.chaveAcessoNacional, keyPem, certPem });
++    if (!r.ok) logger.warn("DANFSe indisponível:", JSON.stringify({ http: r.http, mensagem: r.mensagem, url: r.url }));
++    return r.ok
++      ? { ok: true, pdfBase64: r.pdfBase64, nomeArquivo: `DANFSe-${nota.numeroNfseNacional || nota.chaveAcessoNacional}.pdf` }
++      : { ok: false, http: r.http, mensagem: r.mensagem };
++  } catch (err) {
++    logger.error("DANFSe: falha na chamada ao ADN:", err);
++    return { ok: false, http: 0, mensagem: err.message };
++  }
++});
++
+ /** Diagnóstico: quais códigos de tributação de saúde o município habilitou no
+  * Sistema Nacional (API de Parâmetros Municipais do ADN) e o convênio dele.
+  * Ajuda a escolher o cTribNac sem tentar emitir um por um (E0312). */
+diff --git a/functions/nfseNacional.js b/functions/nfseNacional.js
+index 0161780..2b306e8 100644
+--- a/functions/nfseNacional.js
++++ b/functions/nfseNacional.js
+@@ -362,6 +362,29 @@ async function chamarParametros({ ambiente, caminho, keyPem, certPem, timeout =
+   return { http: resp.status, corpo: resp.data };
+ }
+ 
++/** Baixa o DANFSe (PDF oficial) do ADN pela chave de acesso. O endpoint
++ * (`GET {adn}/danfse/{chave}`) vem de referências da comunidade, não do
++ * manual: por isso devolve o diagnóstico (HTTP/mensagem) se não vier PDF. */
++async function baixarDanfse({ ambiente, chave, keyPem, certPem, timeout = 30000 }) {
++  const base = URLS_PARAMETROS[ambiente === "producao" ? "producao" : "homologacao"].replace(/\/parametrizacao$/, "");
++  const url = `${base}/danfse/${apenasDigitos(chave)}`;
++  const resp = await axios.request({
++    method: "GET", url,
++    httpsAgent: agentMtls(keyPem, certPem),
++    headers: { Accept: "application/pdf" },
++    responseType: "arraybuffer",
++    timeout,
++    validateStatus: () => true,
++  });
++  const buf = Buffer.from(resp.data || []);
++  if (resp.status === 200 && buf.slice(0, 4).toString("latin1") === "%PDF") {
++    return { ok: true, http: 200, pdfBase64: buf.toString("base64") };
++  }
++  let mensagem = "";
++  try { mensagem = buf.slice(0, 400).toString("utf8").replace(/\s+/g, " ").trim(); } catch { /* sem corpo legível */ }
++  return { ok: false, http: resp.status, mensagem, url };
++}
++
+ /** Consulta o convênio do município e, para cada código da lista (mais os
+  * extras pedidos), se há alíquota parametrizada (= código administrado pelo
+  * município). A competência é um date-time no Swagger; o formato aceito pelo
+@@ -437,5 +460,5 @@ function extrairDadosNfse(nfseXml) {
+ module.exports = {
+   VERSAO_LEIAUTE, SERIE_PADRAO, CTRIBNAC_MEDICINA, URLS, URLS_PARAMETROS, CODIGOS_SAUDE,
+   montarIdDps, montarDpsXml, assinarDps, assinarPedidoEvento, assinarElemento, montarPedidoCancelamentoXml, enviarEvento, compactarXml, descompactarXml,
+-  resumirErros, normalizarErros, consultarCodigosHabilitados, cTribMunPadrao, enviarDps, consultarPorIdDps, extrairDadosNfse, agoraSaoPaulo,
++  resumirErros, normalizarErros, consultarCodigosHabilitados, baixarDanfse, cTribMunPadrao, enviarDps, consultarPorIdDps, extrairDadosNfse, agoraSaoPaulo,
+ };
+diff --git a/src/components/NfseDocumentoAcoes.jsx b/src/components/NfseDocumentoAcoes.jsx
+index e277ee2..47e77c7 100644
+--- a/src/components/NfseDocumentoAcoes.jsx
++++ b/src/components/NfseDocumentoAcoes.jsx
+@@ -1,7 +1,7 @@
+ import { useState } from "react";
+-import { ExternalLink, Copy, Check, Mail, Loader2, Info } from "lucide-react";
++import { ExternalLink, Copy, Check, Mail, Loader2, Info, FileDown } from "lucide-react";
+ import { extrairChaveNFe, montarLinkNfse } from "../lib/nfseErros";
+-import { nfseEnviarPorEmail } from "../lib/nfse";
++import { nfseEnviarPorEmail, nfseNacionalDanfse } from "../lib/nfse";
+ import { emailValido } from "../lib/masks";
+ 
+ /** Ações sobre o documento de uma NFS-e já autorizada: abrir a página
+@@ -16,6 +16,28 @@ export default function NfseDocumentoAcoes({ clinicaId, nota, emailSugerido = ""
+   const [copiado, setCopiado] = useState(false);
+   const [enviando, setEnviando] = useState(false);
+   const [feedback, setFeedback] = useState(null);
++  const [baixando, setBaixando] = useState(false);
++  const [erroPdf, setErroPdf] = useState("");
++
++  async function baixarPdfNacional() {
++    setBaixando(true); setErroPdf("");
++    try {
++      const r = await nfseNacionalDanfse(clinicaId, nota.id);
++      if (!r.ok) {
++        setErroPdf(`O Sistema Nacional não entregou o PDF${r.http ? ` (HTTP ${r.http})` : ""}${r.mensagem ? `: ${r.mensagem}` : ""}. Use o portal do Emissor Nacional com a chave de acesso.`);
++        return;
++      }
++      const url = URL.createObjectURL(r.blob);
++      const a = document.createElement("a");
++      a.href = url; a.download = r.nomeArquivo || "DANFSe.pdf";
++      document.body.appendChild(a); a.click(); a.remove();
++      setTimeout(() => URL.revokeObjectURL(url), 10000);
++    } catch (err) {
++      setErroPdf(err?.message || "Não foi possível baixar o PDF.");
++    } finally {
++      setBaixando(false);
++    }
++  }
+ 
+   if (nota.status !== "autorizada") return null;
+ 
+@@ -26,7 +48,13 @@ export default function NfseDocumentoAcoes({ clinicaId, nota, emailSugerido = ""
+         <div className="space-y-1">
+           <div>NFS-e nº <strong className="font-mono">{nota.numeroNfseNacional || "—"}</strong> emitida pelo Emissor Nacional{nota.ambienteNacional === "homologacao" ? " (ambiente de testes — sem validade fiscal)" : ""}.</div>
+           <div className="break-all">Chave de acesso: <span className="font-mono">{nota.chaveAcessoNacional || "—"}</span></div>
+-          <div>O DANFSe (PDF) desta nota pode ser obtido no portal do Emissor Nacional (nfse.gov.br) com a chave de acesso acima.</div>
++          <div className="pt-1">
++            <button type="button" onClick={baixarPdfNacional} disabled={baixando} className="inline-flex items-center gap-1.5 text-xs font-medium bg-white border border-sky-200 text-sky-800 rounded-lg px-3 py-1.5 hover:bg-sky-100 disabled:opacity-60">
++              {baixando ? <Loader2 size={12} className="animate-spin" /> : <FileDown size={12} />} Baixar PDF (DANFSe)
++            </button>
++          </div>
++          {erroPdf && <div className="text-red-700">{erroPdf}</div>}
++          <div>Se o PDF não baixar, ele também pode ser obtido no portal do Emissor Nacional (nfse.gov.br) com a chave de acesso acima.</div>
+         </div>
+       </div>
+     );
+diff --git a/src/lib/nfse.js b/src/lib/nfse.js
+index 7cec82a..4dfcebd 100644
+--- a/src/lib/nfse.js
++++ b/src/lib/nfse.js
+@@ -30,6 +30,19 @@ export async function nfseEmitir(clinicaId, notaFiscalId, dados) {
+   return data; // { status, detalhe }
+ }
+ 
++/** Baixa o DANFSe (PDF oficial) de uma nota do Emissor Nacional e devolve um
++ * Blob pronto para download, ou { ok: false, mensagem } se o ADN não entregou. */
++export async function nfseNacionalDanfse(clinicaId, notaFiscalId) {
++  if (!firebaseConfigured) throw new Error("Firebase não configurado.");
++  const chamar = httpsCallable(functionsInstance, "nfseNacionalDanfse");
++  const { data } = await chamar({ clinicaId, notaFiscalId });
++  if (!data?.ok) return { ok: false, http: data?.http ?? null, mensagem: data?.mensagem || "" };
++  const bin = atob(data.pdfBase64);
++  const bytes = new Uint8Array(bin.length);
++  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
++  return { ok: true, blob: new Blob([bytes], { type: "application/pdf" }), nomeArquivo: data.nomeArquivo };
++}
++
+ /** Consulta ao Sistema Nacional quais códigos de tributação de saúde o
+  * município habilitou (e o convênio dele). */
+ export async function nfseNacionalParametros(clinicaId, extras = []) {

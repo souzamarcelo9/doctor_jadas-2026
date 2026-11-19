@@ -921,6 +921,50 @@ async function emitirNfseNacional({ clinicaId, notaFiscalId, dados, clinica }) {
 }
 
 
+/** Baixa o DANFSe (PDF) de uma NFS-e emitida pelo Emissor Nacional, direto do
+ * ADN, com o certificado da clínica. Qualquer membro da clínica pode baixar.
+ * Entrada: { clinicaId, notaFiscalId }  Saída: { ok, pdfBase64?, nomeArquivo?, http?, mensagem? } */
+exports.nfseNacionalDanfse = onCall({ region: REGION, timeoutSeconds: 60 }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para continuar.");
+  const { clinicaId, notaFiscalId } = request.data || {};
+  if (!clinicaId || !notaFiscalId) throw new HttpsError("invalid-argument", "Dados incompletos.");
+  const membroSnap = await db.doc(`clinicas/${clinicaId}/membros/${request.auth.uid}`).get();
+  if (!membroSnap.exists) throw new HttpsError("permission-denied", "Sem acesso a esta clínica.");
+
+  const [clinicaSnap, notaSnap] = await Promise.all([
+    db.doc(`clinicas/${clinicaId}`).get(),
+    db.doc(`clinicas/${clinicaId}/notasFiscais/${notaFiscalId}`).get(),
+  ]);
+  if (!notaSnap.exists) throw new HttpsError("not-found", "Nota fiscal não encontrada.");
+  const nota = notaSnap.data();
+  const clinica = clinicaSnap.data() || {};
+  if (nota.emissor !== "nacional" || !/^\d{50}$/.test(String(nota.chaveAcessoNacional || ""))) {
+    throw new HttpsError("failed-precondition", "Esta nota não foi emitida pelo Emissor Nacional.");
+  }
+  if (clinica.certificadoNfse?.status !== "configurado") {
+    throw new HttpsError("failed-precondition", "Certificado digital não configurado.");
+  }
+  let keyPem, certPem;
+  try {
+    const secretJson = JSON.parse(await lerSecretMaisRecente(nomeSecretCertificado(clinicaId)));
+    ({ key: keyPem, cert: certPem } = extrairPemDoPfx(Buffer.from(secretJson.pfxBase64, "base64"), secretJson.senha));
+  } catch (err) {
+    logger.error("DANFSe: erro ao ler o certificado:", err);
+    throw new HttpsError("internal", "Não foi possível abrir o certificado configurado.");
+  }
+  const ambiente = nota.ambienteNacional === "producao" ? "producao" : "homologacao";
+  try {
+    const r = await nfseNacional.baixarDanfse({ ambiente, chave: nota.chaveAcessoNacional, keyPem, certPem });
+    if (!r.ok) logger.warn("DANFSe indisponível:", JSON.stringify({ http: r.http, mensagem: r.mensagem, url: r.url }));
+    return r.ok
+      ? { ok: true, pdfBase64: r.pdfBase64, nomeArquivo: `DANFSe-${nota.numeroNfseNacional || nota.chaveAcessoNacional}.pdf` }
+      : { ok: false, http: r.http, mensagem: r.mensagem };
+  } catch (err) {
+    logger.error("DANFSe: falha na chamada ao ADN:", err);
+    return { ok: false, http: 0, mensagem: err.message };
+  }
+});
+
 /** Diagnóstico: quais códigos de tributação de saúde o município habilitou no
  * Sistema Nacional (API de Parâmetros Municipais do ADN) e o convênio dele.
  * Ajuda a escolher o cTribNac sem tentar emitir um por um (E0312). */
